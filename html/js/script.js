@@ -2319,14 +2319,17 @@ function ProcessReceivedJsonStatusMessage(JsonStat) {
         quality = 100;
     }
 
-    $('#w_connected').text((true === Wifi.connected) ? "Yes" : "No");
+    $('#w_state').text(Wifi.state);
     $('#w_hostname').text(Wifi.hostname);
     $('#w_rssi').text(rssi);
     $('#w_quality').text(rssiToPercent[quality]);
     $('#w_ssid').text(Wifi.ssid);
     $('#w_bssid').text(Wifi.bssid);
+    $('#w_channel').text(Wifi.channel);
     $('#w_ip').text(Wifi.ip);
     $('#w_subnet').text(Wifi.subnet);
+    $('#w_gateway').text(Wifi.gateway);
+    $('#w_dns').text(Wifi.dns);
     $('#w_mac').text(Wifi.mac);
 
     if ({}.hasOwnProperty.call(Network, 'eth')) {

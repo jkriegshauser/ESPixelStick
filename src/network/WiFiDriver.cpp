@@ -629,6 +629,13 @@ void c_WiFiDriver::GetStatus (JsonObject& jsonStatus)
     JsonWrite(jsonStatus, CN_mac,       WiFi.macAddress ());
     JsonWrite(jsonStatus, CN_ssid,      WiFi.SSID ());
     JsonWrite(jsonStatus, CN_bssid,     IsWiFiConnected () ? WiFi.BSSIDstr () : emptyString);
+    JsonWrite(jsonStatus, CN_channel,   WiFi.channel ());
+    JsonWrite(jsonStatus, CN_gateway,   WiFi.gatewayIP ().toString ());
+    JsonWrite(jsonStatus, CN_dns,       WiFi.dnsIP ().toString ());
+
+    String StateName;
+    pCurrentFsmState->GetStateName (StateName);
+    JsonWrite(jsonStatus, CN_state,     StateName);
     JsonWrite(jsonStatus, CN_connected, IsWiFiConnected ());
 
     // DEBUG_END;
