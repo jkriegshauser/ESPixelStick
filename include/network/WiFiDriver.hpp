@@ -130,9 +130,11 @@ private:
     FastTimer   RoamCheckTimer;                 // Minimum time between roam checks
     uint8_t     RoamTargetBssid[6];             // AP to move to when a roam check found a stronger AP
     int32_t     RoamTargetChannel = 0;
+    bool        ConnectionIsPinned = false;     // The current attempt targets a specific BSSID
     void        StartApScan (bool IsRoamCheck);
     void        ProcessApScanResults ();
     void        CheckSignalStrength ();
+    bool        RetryWithoutPinnedAp ();
     // config_t           *config = nullptr;                           // Current configuration
     IPAddress   CurrentIpAddress  = IPAddress (0, 0, 0, 0);
     IPAddress   CurrentSubnetMask = IPAddress (0, 0, 0, 0);

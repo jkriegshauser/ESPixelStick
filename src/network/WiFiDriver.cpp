@@ -272,6 +272,7 @@ void c_WiFiDriver::connectWifi (const String & current_ssid, const String & curr
         // remember the credentials for the scan completion and for roaming
         SafeStrncpy (CurrentSsid,       current_ssid.c_str (),       sizeof (CurrentSsid));
         SafeStrncpy (CurrentPassphrase, current_passphrase.c_str (), sizeof (CurrentPassphrase));
+        ConnectionIsPinned = false;
 
 #ifdef ARDUINO_ARCH_ESP8266
         // The SDK connects to the first AP it hears advertising the SSID, which is not
@@ -445,6 +446,7 @@ void c_WiFiDriver::ProcessApScanResults ()
         if (FoundAp)
         {
             logcon (String (F ("Connecting to AP ")) + BestBssidStr);
+            ConnectionIsPinned = true;
             WiFi.begin (CurrentSsid, CurrentPassphrase, BestChannel, BestBssid);
         }
         else
@@ -501,6 +503,28 @@ void c_WiFiDriver::CheckSignalStrength ()
 
     /// DEBUG_END;
 } // CheckSignalStrength
+
+//-----------------------------------------------------------------------------
+// A connection attempt to a specific AP timed out. Try once more the old way,
+// letting the SDK pick any AP that advertises the SSID.
+bool c_WiFiDriver::RetryWithoutPinnedAp ()
+{
+    // DEBUG_START;
+
+    bool Retrying = false;
+    if (ConnectionIsPinned)
+    {
+        ConnectionIsPinned = false;
+        logcon (F ("The selected AP did not answer. Connecting using the SSID only"));
+        FsmTimer.StartTimer (MilliSecondsInASecond * sta_timeout, false);
+        WiFi.disconnect ();
+        WiFi.begin (CurrentSsid, CurrentPassphrase);
+        Retrying = true;
+    }
+
+    // DEBUG_END;
+    return Retrying;
+} // RetryWithoutPinnedAp
 
 //-----------------------------------------------------------------------------
 void c_WiFiDriver::Disable ()
@@ -931,10 +955,13 @@ void fsm_WiFi_state_ConnectingUsingConfig::Poll ()
         if (pWiFiDriver->GetFsmTimer().IsExpired())
         {
             /// DEBUG_V (String ("this: ") + String (uint32_t (this), HEX));
-            logcon (F ("WiFi Failed to connect using Configured Credentials"));
-            // DEBUG_V ("Try the next SSID");
-            pWiFiDriver->ApCredentials.GetNextCredentials();
-            Init ();
+            if (!pWiFiDriver->RetryWithoutPinnedAp ())
+            {
+                logcon (F ("WiFi Failed to connect using Configured Credentials"));
+                // DEBUG_V ("Try the next SSID");
+                pWiFiDriver->ApCredentials.GetNextCredentials();
+                Init ();
+            }
         }
     }
 
@@ -1011,8 +1038,11 @@ void fsm_WiFi_state_ConnectingUsingDefaults::Poll ()
         if (pWiFiDriver->GetFsmTimer().IsExpired())
         {
             // DEBUG_V (String ("this: ") + String (uint32_t (this), HEX));
-            logcon (F ("WiFi Failed to connect using default Credentials"));
-            fsm_WiFi_state_ConnectingAsAP_imp.Init ();
+            if (!pWiFiDriver->RetryWithoutPinnedAp ())
+            {
+                logcon (F ("WiFi Failed to connect using default Credentials"));
+                fsm_WiFi_state_ConnectingAsAP_imp.Init ();
+            }
         }
     }
 
@@ -1220,6 +1250,7 @@ void fsm_WiFi_state_Roaming::Init ()
         NetworkMgr.SetWiFiIsConnected (false);
     }
 
+    pWiFiDriver->ConnectionIsPinned = true;
     WiFi.disconnect ();
     WiFi.begin (pWiFiDriver->CurrentSsid, pWiFiDriver->CurrentPassphrase, pWiFiDriver->RoamTargetChannel, pWiFiDriver->RoamTargetBssid);
 
@@ -1237,8 +1268,11 @@ void fsm_WiFi_state_Roaming::Poll ()
     {
         if (pWiFiDriver->GetFsmTimer ().IsExpired ())
         {
-            logcon (F ("WiFi Failed to connect to the stronger AP"));
-            fsm_WiFi_state_ConnectionFailed_imp.Init ();
+            if (!pWiFiDriver->RetryWithoutPinnedAp ())
+            {
+                logcon (F ("WiFi Failed to connect to the stronger AP"));
+                fsm_WiFi_state_ConnectionFailed_imp.Init ();
+            }
         }
     }
 
