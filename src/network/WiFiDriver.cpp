@@ -266,12 +266,121 @@ void c_WiFiDriver::connectWifi (const String & current_ssid, const String & curr
 
         WiFi.setSleep(false);
         // DEBUG_V ("");
+
+#ifdef ARDUINO_ARCH_ESP8266
+        // The SDK connects to the first AP it hears advertising the SSID, which is not
+        // necessarily the closest one when several APs share the SSID. Scan for the SSID
+        // first and connect to the AP with the strongest signal (see issue #806).
+        SafeStrncpy (CurrentSsid,       current_ssid.c_str (),       sizeof (CurrentSsid));
+        SafeStrncpy (CurrentPassphrase, current_passphrase.c_str (), sizeof (CurrentPassphrase));
+
+        // Mark the scan as pending before starting it: scanNetworks yields to the SDK, and a
+        // state change during that yield (SetFsmState) must be able to cancel the scan.
+        fsm_WiFi_state * StateAtStart = pCurrentFsmState;
+        ApScanInProgress = true;
+        ApScanTimer.StartTimer (WIFI_AP_SCAN_TIMEOUT_MS, false);
+        if (WIFI_SCAN_FAILED == WiFi.scanNetworks (true, false, 0, reinterpret_cast<uint8_t*>(CurrentSsid)))
+        {
+            ApScanInProgress = false;
+        }
+
+        if (!ApScanInProgress && (StateAtStart == pCurrentFsmState))
+        {
+            // DEBUG_V ("Could not start a scan. Connect using the SSID only");
+            WiFi.begin(current_ssid.c_str(), current_passphrase.c_str());
+        }
+#else
+        // Scan all channels and connect to the AP with the strongest signal instead
+        // of the first AP found advertising the SSID (see issue #806).
+        WiFi.setScanMethod (WIFI_ALL_CHANNEL_SCAN);
+        WiFi.setSortMethod (WIFI_CONNECT_AP_BY_SIGNAL);
         WiFi.begin(current_ssid.c_str(), current_passphrase.c_str());
+#endif // def ARDUINO_ARCH_ESP8266
     } while (false);
 
     // DEBUG_END;
 
 } // connectWifi
+
+//-----------------------------------------------------------------------------
+#ifdef ARDUINO_ARCH_ESP8266
+// Called from Poll while a scan for the requested SSID is in progress. Once the
+// scan completes, connect to the AP that reported the strongest signal.
+void c_WiFiDriver::ProcessApScanResults ()
+{
+    /// DEBUG_START;
+
+    do // once
+    {
+        if (!ApScanInProgress)
+        {
+            break;
+        }
+
+        if (ResetWiFi)
+        {
+            // the pending reset starts over, including a new scan
+            ApScanInProgress = false;
+            break;
+        }
+
+        int8_t NumNetworksFound = WiFi.scanComplete ();
+        if ((WIFI_SCAN_RUNNING == NumNetworksFound) && !ApScanTimer.IsExpired ())
+        {
+            // still waiting for the scan to finish
+            break;
+        }
+        ApScanInProgress = false;
+
+        bool    FoundAp     = false;
+        int32_t BestRssi    = 0;
+        int32_t BestChannel = 0;
+        uint8_t BestBssid[6];
+        String  BestBssidStr;
+        String  Line;
+        Line.reserve (64);
+
+        for (int8_t index = 0; index < NumNetworksFound; ++index)
+        {
+            if (!WiFi.SSID (index).equals (CurrentSsid))
+            {
+                continue;
+            }
+
+            Line  = F ("Found AP ");
+            Line += WiFi.BSSIDstr (index);
+            Line += F (" on channel ");
+            Line += WiFi.channel (index);
+            Line += F (" with RSSI ");
+            Line += WiFi.RSSI (index);
+            logcon (Line);
+
+            if (!FoundAp || (WiFi.RSSI (index) > BestRssi))
+            {
+                FoundAp      = true;
+                BestRssi     = WiFi.RSSI (index);
+                BestChannel  = WiFi.channel (index);
+                BestBssidStr = WiFi.BSSIDstr (index);
+                memcpy (BestBssid, WiFi.BSSID (index), sizeof (BestBssid));
+            }
+        }
+        WiFi.scanDelete ();
+
+        if (FoundAp)
+        {
+            logcon (String (F ("Connecting to AP ")) + BestBssidStr);
+            WiFi.begin (CurrentSsid, CurrentPassphrase, BestChannel, BestBssid);
+        }
+        else
+        {
+            logcon (F ("Scan did not find the SSID. Connecting using the SSID only"));
+            WiFi.begin (CurrentSsid, CurrentPassphrase);
+        }
+    } while (false);
+
+    /// DEBUG_END;
+} // ProcessApScanResults
+#endif // def ARDUINO_ARCH_ESP8266
 
 //-----------------------------------------------------------------------------
 void c_WiFiDriver::Disable ()
@@ -375,6 +484,7 @@ void c_WiFiDriver::GetStatus (JsonObject& jsonStatus)
     JsonWrite(jsonStatus, CN_subnet,    getIpSubNetMask ().toString ());
     JsonWrite(jsonStatus, CN_mac,       WiFi.macAddress ());
     JsonWrite(jsonStatus, CN_ssid,      WiFi.SSID ());
+    JsonWrite(jsonStatus, CN_bssid,     IsWiFiConnected () ? WiFi.BSSIDstr () : emptyString);
     JsonWrite(jsonStatus, CN_connected, IsWiFiConnected ());
 
     // DEBUG_END;
@@ -434,6 +544,10 @@ void c_WiFiDriver::onWiFiDisconnect (const WiFiEvent_t event, const WiFiEventInf
 void c_WiFiDriver::Poll ()
 {
     // DEBUG_START;
+
+#ifdef ARDUINO_ARCH_ESP8266
+    ProcessApScanResults ();
+#endif // def ARDUINO_ARCH_ESP8266
 
     if (NextPoll.IsExpired())
     {
@@ -549,6 +663,10 @@ void c_WiFiDriver::SetFsmState (fsm_WiFi_state* NewState)
     // DEBUG_V (String ("pCurrentFsmState: ") + String (uint32_t (pCurrentFsmState), HEX));
     // DEBUG_V (String ("        NewState: ") + String (uint32_t (NewState), HEX));
     pCurrentFsmState = NewState;
+#ifdef ARDUINO_ARCH_ESP8266
+    // A state change makes the result of any scan still in flight irrelevant
+    ApScanInProgress = false;
+#endif // def ARDUINO_ARCH_ESP8266
     // displayFsmState ();
     // DEBUG_END;
 

@@ -2324,6 +2324,7 @@ function ProcessReceivedJsonStatusMessage(JsonStat) {
     $('#w_rssi').text(rssi);
     $('#w_quality').text(rssiToPercent[quality]);
     $('#w_ssid').text(Wifi.ssid);
+    $('#w_bssid').text(Wifi.bssid);
     $('#w_ip').text(Wifi.ip);
     $('#w_subnet').text(Wifi.subnet);
     $('#w_mac').text(Wifi.mac);

@@ -27,6 +27,9 @@
 #   include <WiFi.h>
 #endif // def ARDUINO_ARCH_ESP8266
 
+// An asynchronous scan for the APs that advertise the SSID is given this long to complete
+#define WIFI_AP_SCAN_TIMEOUT_MS   (10 * MilliSecondsInASecond)
+
 // forward declaration for the compiler
 class c_WiFiDriver;
 
@@ -93,6 +96,11 @@ private:
 #ifdef ARDUINO_ARCH_ESP8266
     WiFiEventHandler    wifiConnectHandler;     // WiFi connect handler
     WiFiEventHandler    wifiDisconnectHandler;  // WiFi disconnect handler
+    bool                ApScanInProgress = false;   // Scanning for the strongest AP before connecting
+    FastTimer           ApScanTimer;                // Deadline for that scan
+    char                CurrentSsid[65];            // Credentials to use once the scan completes
+    char                CurrentPassphrase[65];
+    void ProcessApScanResults ();
 #endif
     // config_t           *config = nullptr;                           // Current configuration
     IPAddress   CurrentIpAddress  = IPAddress (0, 0, 0, 0);

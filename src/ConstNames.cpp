@@ -44,6 +44,7 @@ const CN_PROGMEM char CN_blanktime                [] = "blanktime";
 const CN_PROGMEM char CN_bridge                   [] = "bridge";
 const CN_PROGMEM char CN_brightness               [] = "brightness";
 const CN_PROGMEM char CN_brightnessEnd            [] = "brightnessEnd";
+const CN_PROGMEM char CN_bssid                    [] = "bssid";
 const CN_PROGMEM char CN_cfgver                   [] = "cfgver";
 const CN_PROGMEM char CN_channels                 [] = "channels";
 const CN_PROGMEM char CN_clean                    [] = "clean";

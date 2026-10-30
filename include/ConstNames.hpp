@@ -50,6 +50,7 @@ extern const CN_PROGMEM char CN_blanktime [];
 extern const CN_PROGMEM char CN_bridge [];
 extern const CN_PROGMEM char CN_brightness [];
 extern const CN_PROGMEM char CN_brightnessEnd [];
+extern const CN_PROGMEM char CN_bssid [];
 extern const CN_PROGMEM char CN_cfgver [];
 extern const CN_PROGMEM char CN_channels [];
 extern const CN_PROGMEM char CN_clean [];
