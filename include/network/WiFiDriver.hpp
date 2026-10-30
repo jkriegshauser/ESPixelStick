@@ -30,6 +30,28 @@
 // An asynchronous scan for the APs that advertise the SSID is given this long to complete
 #define WIFI_AP_SCAN_TIMEOUT_MS   (10 * MilliSecondsInASecond)
 
+// Roaming: while connected, look for a stronger AP once the signal has stayed weak for a while.
+// Each value can be overridden with a -D build flag in platformio_user.ini. Setting the
+// threshold to -127 disables roaming.
+#ifndef WIFI_ROAM_RSSI_THRESHOLD
+#   define WIFI_ROAM_RSSI_THRESHOLD    (-75)  ///< dBm. Below this the link is considered weak
+#endif
+#ifndef WIFI_ROAM_WEAK_POLLS
+#   define WIFI_ROAM_WEAK_POLLS        15     ///< Consecutive one second polls below the threshold before scanning
+#endif
+#ifndef WIFI_ROAM_MIN_IMPROVEMENT
+#   define WIFI_ROAM_MIN_IMPROVEMENT   10     ///< dB. A candidate AP must beat the current AP by at least this much
+#endif
+#ifndef WIFI_ROAM_SETTLE_TIME_MS
+#   define WIFI_ROAM_SETTLE_TIME_MS    (30 * MilliSecondsInASecond)       ///< Wait after connecting before the first check
+#endif
+#ifndef WIFI_ROAM_RETRY_TIME_MS
+#   define WIFI_ROAM_RETRY_TIME_MS     (60 * MilliSecondsInASecond)       ///< Wait after a check that found nothing better
+#endif
+#ifndef WIFI_ROAM_MAX_RETRY_TIME_MS
+#   define WIFI_ROAM_MAX_RETRY_TIME_MS (16 * 60 * MilliSecondsInASecond)  ///< That wait doubles after every fruitless check, up to this
+#endif
+
 // forward declaration for the compiler
 class c_WiFiDriver;
 
@@ -96,12 +118,21 @@ private:
 #ifdef ARDUINO_ARCH_ESP8266
     WiFiEventHandler    wifiConnectHandler;     // WiFi connect handler
     WiFiEventHandler    wifiDisconnectHandler;  // WiFi disconnect handler
-    bool                ApScanInProgress = false;   // Scanning for the strongest AP before connecting
-    FastTimer           ApScanTimer;                // Deadline for that scan
-    char                CurrentSsid[65];            // Credentials to use once the scan completes
-    char                CurrentPassphrase[65];
-    void ProcessApScanResults ();
 #endif
+    char        CurrentSsid[65];                // Credentials used for the current connection attempt
+    char        CurrentPassphrase[65];
+    bool        ApScanInProgress  = false;      // An async scan for CurrentSsid is running
+    bool        ScanIsRoamCheck   = false;      // The running scan looks for a stronger AP while connected
+    FastTimer   ApScanTimer;                    // Deadline for the running scan
+    uint16_t    WeakSignalCount   = 0;          // Consecutive polls with the RSSI below the roaming threshold
+    bool        RoamChecksAllowed = true;       // Cleared when a scan shows no other AP for the SSID
+    uint32_t    RoamCheckWaitMs   = WIFI_ROAM_RETRY_TIME_MS; // Wait after a fruitless check, doubles each time
+    FastTimer   RoamCheckTimer;                 // Minimum time between roam checks
+    uint8_t     RoamTargetBssid[6];             // AP to move to when a roam check found a stronger AP
+    int32_t     RoamTargetChannel = 0;
+    void        StartApScan (bool IsRoamCheck);
+    void        ProcessApScanResults ();
+    void        CheckSignalStrength ();
     // config_t           *config = nullptr;                           // Current configuration
     IPAddress   CurrentIpAddress  = IPAddress (0, 0, 0, 0);
     IPAddress   CurrentSubnetMask = IPAddress (0, 0, 0, 0);
@@ -147,6 +178,7 @@ protected:
     friend class fsm_WiFi_state_ConnectingUsingConfig;
     friend class fsm_WiFi_state_ConnectingUsingDefaults;
     friend class fsm_WiFi_state_ConnectedToAP;
+    friend class fsm_WiFi_state_Roaming;
     friend class fsm_WiFi_state_ConnectingAsAP;
     friend class fsm_WiFi_state_ConnectedToSta;
     friend class fsm_WiFi_state_ConnectionFailed;
@@ -224,6 +256,21 @@ public:
     virtual void OnDisconnect (void);
 
 }; // fsm_WiFi_state_ConnectedToAP
+
+/*****************************************************************************/
+// Moving to a stronger AP that advertises the same SSID
+class fsm_WiFi_state_Roaming : public fsm_WiFi_state
+{
+public:
+    fsm_WiFi_state_Roaming() {}
+    virtual ~fsm_WiFi_state_Roaming() {}
+
+    virtual void Poll (void);
+    virtual void Init (void);
+    virtual void GetStateName (String& sName) { sName = F ("Roaming To A Stronger AP"); }
+    virtual void OnConnect (void);
+    virtual void OnDisconnect (void)          { /* expected while switching APs */ }
+}; // fsm_WiFi_state_Roaming
 
 /*****************************************************************************/
 class fsm_WiFi_state_ConnectingAsAP : public fsm_WiFi_state

@@ -75,6 +75,7 @@ fsm_WiFi_state_Boot                    fsm_WiFi_state_Boot_imp;
 fsm_WiFi_state_ConnectingUsingConfig   fsm_WiFi_state_ConnectingUsingConfig_imp;
 fsm_WiFi_state_ConnectingUsingDefaults fsm_WiFi_state_ConnectingUsingDefaults_imp;
 fsm_WiFi_state_ConnectedToAP           fsm_WiFi_state_ConnectedToAP_imp;
+fsm_WiFi_state_Roaming                 fsm_WiFi_state_Roaming_imp;
 fsm_WiFi_state_ConnectingAsAP          fsm_WiFi_state_ConnectingAsAP_imp;
 fsm_WiFi_state_ConnectedToSta          fsm_WiFi_state_ConnectedToSta_imp;
 fsm_WiFi_state_ConnectionFailed        fsm_WiFi_state_ConnectionFailed_imp;
@@ -88,6 +89,7 @@ c_WiFiDriver::c_WiFiDriver ()
     fsm_WiFi_state_ConnectingUsingConfig_imp.SetParent (this);
     fsm_WiFi_state_ConnectingUsingDefaults_imp.SetParent (this);
     fsm_WiFi_state_ConnectedToAP_imp.SetParent (this);
+    fsm_WiFi_state_Roaming_imp.SetParent (this);
     fsm_WiFi_state_ConnectingAsAP_imp.SetParent (this);
     fsm_WiFi_state_ConnectedToSta_imp.SetParent (this);
     fsm_WiFi_state_ConnectionFailed_imp.SetParent (this);
@@ -267,23 +269,16 @@ void c_WiFiDriver::connectWifi (const String & current_ssid, const String & curr
         WiFi.setSleep(false);
         // DEBUG_V ("");
 
+        // remember the credentials for the scan completion and for roaming
+        SafeStrncpy (CurrentSsid,       current_ssid.c_str (),       sizeof (CurrentSsid));
+        SafeStrncpy (CurrentPassphrase, current_passphrase.c_str (), sizeof (CurrentPassphrase));
+
 #ifdef ARDUINO_ARCH_ESP8266
         // The SDK connects to the first AP it hears advertising the SSID, which is not
         // necessarily the closest one when several APs share the SSID. Scan for the SSID
         // first and connect to the AP with the strongest signal (see issue #806).
-        SafeStrncpy (CurrentSsid,       current_ssid.c_str (),       sizeof (CurrentSsid));
-        SafeStrncpy (CurrentPassphrase, current_passphrase.c_str (), sizeof (CurrentPassphrase));
-
-        // Mark the scan as pending before starting it: scanNetworks yields to the SDK, and a
-        // state change during that yield (SetFsmState) must be able to cancel the scan.
         fsm_WiFi_state * StateAtStart = pCurrentFsmState;
-        ApScanInProgress = true;
-        ApScanTimer.StartTimer (WIFI_AP_SCAN_TIMEOUT_MS, false);
-        if (WIFI_SCAN_FAILED == WiFi.scanNetworks (true, false, 0, reinterpret_cast<uint8_t*>(CurrentSsid)))
-        {
-            ApScanInProgress = false;
-        }
-
+        StartApScan (false);
         if (!ApScanInProgress && (StateAtStart == pCurrentFsmState))
         {
             // DEBUG_V ("Could not start a scan. Connect using the SSID only");
@@ -303,9 +298,36 @@ void c_WiFiDriver::connectWifi (const String & current_ssid, const String & curr
 } // connectWifi
 
 //-----------------------------------------------------------------------------
+// Start an asynchronous scan for the APs that advertise CurrentSsid. The flags are
+// set before the call: scanNetworks yields to the SDK, and a state change during
+// that yield (SetFsmState) must be able to cancel the scan.
+void c_WiFiDriver::StartApScan (bool IsRoamCheck)
+{
+    // DEBUG_START;
+
+    ScanIsRoamCheck  = IsRoamCheck;
+    ApScanInProgress = true;
+    ApScanTimer.StartTimer (WIFI_AP_SCAN_TIMEOUT_MS, false);
+
 #ifdef ARDUINO_ARCH_ESP8266
-// Called from Poll while a scan for the requested SSID is in progress. Once the
-// scan completes, connect to the AP that reported the strongest signal.
+    int8_t  ScanResult = WiFi.scanNetworks (true, false, 0, reinterpret_cast<uint8_t*>(CurrentSsid));
+#else
+    int16_t ScanResult = WiFi.scanNetworks (true, false, false, 300, 0, CurrentSsid);
+#endif // def ARDUINO_ARCH_ESP8266
+
+    if (WIFI_SCAN_FAILED == ScanResult)
+    {
+        ApScanInProgress = false;
+        ScanIsRoamCheck  = false;
+    }
+
+    // DEBUG_END;
+} // StartApScan
+
+//-----------------------------------------------------------------------------
+// Called from Poll while a scan for CurrentSsid is in progress. Once the scan
+// completes, connect to the AP with the strongest signal (initial connection on
+// the ESP8266) or move to it if it is clearly stronger than the current AP (roam check).
 void c_WiFiDriver::ProcessApScanResults ()
 {
     /// DEBUG_START;
@@ -321,26 +343,33 @@ void c_WiFiDriver::ProcessApScanResults ()
         {
             // the pending reset starts over, including a new scan
             ApScanInProgress = false;
+            ScanIsRoamCheck  = false;
             break;
         }
 
-        int8_t NumNetworksFound = WiFi.scanComplete ();
+        int16_t NumNetworksFound = WiFi.scanComplete ();
         if ((WIFI_SCAN_RUNNING == NumNetworksFound) && !ApScanTimer.IsExpired ())
         {
             // still waiting for the scan to finish
             break;
         }
         ApScanInProgress = false;
+        bool IsRoamCheck = ScanIsRoamCheck;
+        ScanIsRoamCheck  = false;
 
-        bool    FoundAp     = false;
-        int32_t BestRssi    = 0;
-        int32_t BestChannel = 0;
-        uint8_t BestBssid[6];
-        String  BestBssidStr;
-        String  Line;
+        // While connected, the AP we are using is not a candidate
+        uint8_t * CurrentBssid = (IsRoamCheck) ? WiFi.BSSID () : nullptr;
+        int32_t   CurrentRssi  = WiFi.RSSI ();
+        uint32_t  OtherApCount = 0;
+        bool      FoundAp      = false;
+        int32_t   BestRssi     = 0;
+        int32_t   BestChannel  = 0;
+        uint8_t   BestBssid[6];
+        String    BestBssidStr;
+        String    Line;
         Line.reserve (64);
 
-        for (int8_t index = 0; index < NumNetworksFound; ++index)
+        for (int16_t index = 0; index < NumNetworksFound; ++index)
         {
             if (!WiFi.SSID (index).equals (CurrentSsid))
             {
@@ -355,6 +384,14 @@ void c_WiFiDriver::ProcessApScanResults ()
             Line += WiFi.RSSI (index);
             logcon (Line);
 
+            if ((nullptr != CurrentBssid) && (0 == memcmp (CurrentBssid, WiFi.BSSID (index), sizeof (BestBssid))))
+            {
+                // compare the candidates against the scan reading of the current AP
+                CurrentRssi = WiFi.RSSI (index);
+                continue;
+            }
+
+            ++OtherApCount;
             if (!FoundAp || (WiFi.RSSI (index) > BestRssi))
             {
                 FoundAp      = true;
@@ -366,6 +403,45 @@ void c_WiFiDriver::ProcessApScanResults ()
         }
         WiFi.scanDelete ();
 
+        if (IsRoamCheck)
+        {
+            if (FoundAp && (BestRssi >= (CurrentRssi + WIFI_ROAM_MIN_IMPROVEMENT)))
+            {
+                Line  = F ("Moving to AP ");
+                Line += BestBssidStr;
+                Line += F (" (");
+                Line += BestRssi;
+                Line += F (" dBm) from AP ");
+                Line += WiFi.BSSIDstr ();
+                Line += F (" (");
+                Line += CurrentRssi;
+                Line += F (" dBm)");
+                logcon (Line);
+                memcpy (RoamTargetBssid, BestBssid, sizeof (RoamTargetBssid));
+                RoamTargetChannel = BestChannel;
+                fsm_WiFi_state_Roaming_imp.Init ();
+            }
+            else if ((0 == OtherApCount) && (NumNetworksFound >= 0))
+            {
+                // Nothing to move to. The set of APs does not change while we stay connected.
+                logcon (F ("No other AP advertises the SSID. Roam checks stop until the next connection"));
+                RoamChecksAllowed = false;
+            }
+            else
+            {
+                // Check again later, waiting longer each time the result is the same
+                logcon (F ("No stronger AP found. Staying on the current AP"));
+                RoamCheckTimer.StartTimer (RoamCheckWaitMs, false);
+                RoamCheckWaitMs = RoamCheckWaitMs * 2;
+                if (RoamCheckWaitMs > WIFI_ROAM_MAX_RETRY_TIME_MS)
+                {
+                    RoamCheckWaitMs = WIFI_ROAM_MAX_RETRY_TIME_MS;
+                }
+            }
+            break;
+        }
+
+        // Initial connection. The ESP32 SDK picks the AP itself, so only the ESP8266 gets here.
         if (FoundAp)
         {
             logcon (String (F ("Connecting to AP ")) + BestBssidStr);
@@ -380,7 +456,51 @@ void c_WiFiDriver::ProcessApScanResults ()
 
     /// DEBUG_END;
 } // ProcessApScanResults
-#endif // def ARDUINO_ARCH_ESP8266
+
+//-----------------------------------------------------------------------------
+// Called once a second while connected. After the signal has been weak for a
+// while, scan for a stronger AP that advertises the same SSID.
+void c_WiFiDriver::CheckSignalStrength ()
+{
+    /// DEBUG_START;
+
+    do // once
+    {
+        if (!RoamChecksAllowed || ApScanInProgress || !RoamCheckTimer.IsExpired ())
+        {
+            break;
+        }
+
+        int32_t CurrentRssi = WiFi.RSSI ();
+        if (CurrentRssi >= WIFI_ROAM_RSSI_THRESHOLD)
+        {
+            WeakSignalCount = 0;
+            break;
+        }
+
+        if (++WeakSignalCount < WIFI_ROAM_WEAK_POLLS)
+        {
+            break;
+        }
+        WeakSignalCount = 0;
+
+        String Line;
+        Line.reserve (64);
+        Line  = F ("Weak signal (");
+        Line += CurrentRssi;
+        Line += F (" dBm). Scanning for a stronger AP");
+        logcon (Line);
+
+        StartApScan (true);
+        if (!ApScanInProgress)
+        {
+            // DEBUG_V ("Could not start a scan. Try again later");
+            RoamCheckTimer.StartTimer (RoamCheckWaitMs, false);
+        }
+    } while (false);
+
+    /// DEBUG_END;
+} // CheckSignalStrength
 
 //-----------------------------------------------------------------------------
 void c_WiFiDriver::Disable ()
@@ -545,9 +665,7 @@ void c_WiFiDriver::Poll ()
 {
     // DEBUG_START;
 
-#ifdef ARDUINO_ARCH_ESP8266
     ProcessApScanResults ();
-#endif // def ARDUINO_ARCH_ESP8266
 
     if (NextPoll.IsExpired())
     {
@@ -643,6 +761,11 @@ bool c_WiFiDriver::SetConfig (JsonObject & json)
             // DEBUG_V ("need to cycle the WiFi to move to new STA settings");
             WiFi.disconnect();
         }
+        else if(pCurrentFsmState == &fsm_WiFi_state_Roaming_imp)
+        {
+            // apply the new settings with a fresh connection once the main loop runs
+            ResetWiFi = true;
+        }
         else if(pCurrentFsmState == &fsm_WiFi_state_ConnectedToSta_imp)
         {
             // DEBUG_V ("need to cycle the WiFi to move to new AP settings");
@@ -663,10 +786,9 @@ void c_WiFiDriver::SetFsmState (fsm_WiFi_state* NewState)
     // DEBUG_V (String ("pCurrentFsmState: ") + String (uint32_t (pCurrentFsmState), HEX));
     // DEBUG_V (String ("        NewState: ") + String (uint32_t (NewState), HEX));
     pCurrentFsmState = NewState;
-#ifdef ARDUINO_ARCH_ESP8266
     // A state change makes the result of any scan still in flight irrelevant
     ApScanInProgress = false;
-#endif // def ARDUINO_ARCH_ESP8266
+    ScanIsRoamCheck  = false;
     // displayFsmState ();
     // DEBUG_END;
 
@@ -1030,6 +1152,10 @@ void fsm_WiFi_state_ConnectedToAP::Poll ()
         // DEBUG_V ("WiFi Handle Silent Disconnect");
         WiFi.reconnect ();
     }
+    else
+    {
+        pWiFiDriver->CheckSignalStrength ();
+    }
 
     /// DEBUG_END;
 } // fsm_WiFi_state_ConnectedToAP::Poll
@@ -1051,6 +1177,12 @@ void fsm_WiFi_state_ConnectedToAP::Init ()
 
     logcon (String (F ("Connected with IP: ")) + pWiFiDriver->getIpAddress ().toString ());
 
+    // give the link time to settle before looking for a stronger AP
+    pWiFiDriver->WeakSignalCount   = 0;
+    pWiFiDriver->RoamChecksAllowed = true;
+    pWiFiDriver->RoamCheckWaitMs   = WIFI_ROAM_RETRY_TIME_MS;
+    pWiFiDriver->RoamCheckTimer.StartTimer (WIFI_ROAM_SETTLE_TIME_MS, false);
+
     pWiFiDriver->SetIsWiFiConnected (true);
     NetworkMgr.SetWiFiIsConnected (true);
 
@@ -1069,6 +1201,57 @@ void fsm_WiFi_state_ConnectedToAP::OnDisconnect ()
     // DEBUG_END;
 
 } // fsm_WiFi_state_ConnectedToAP::OnDisconnect
+
+/*****************************************************************************/
+/*****************************************************************************/
+// Move to a stronger AP that advertises the same SSID
+void fsm_WiFi_state_Roaming::Init ()
+{
+    // DEBUG_START;
+
+    pWiFiDriver->SetFsmState (this);
+    pWiFiDriver->AnnounceState ();
+    pWiFiDriver->GetFsmTimer ().StartTimer (MilliSecondsInASecond * pWiFiDriver->Get_sta_timeout (), false);
+
+    // the network services see this as a normal disconnect / reconnect cycle
+    if (pWiFiDriver->IsWiFiConnected ())
+    {
+        pWiFiDriver->SetIsWiFiConnected (false);
+        NetworkMgr.SetWiFiIsConnected (false);
+    }
+
+    WiFi.disconnect ();
+    WiFi.begin (pWiFiDriver->CurrentSsid, pWiFiDriver->CurrentPassphrase, pWiFiDriver->RoamTargetChannel, pWiFiDriver->RoamTargetBssid);
+
+    // DEBUG_END;
+} // fsm_WiFi_state_Roaming::Init
+
+/*****************************************************************************/
+// Wait for the connection to the new AP
+void fsm_WiFi_state_Roaming::Poll ()
+{
+    /// DEBUG_START;
+
+    // wait for the connection to complete via the callback function
+    if (WiFi.status () != WL_CONNECTED)
+    {
+        if (pWiFiDriver->GetFsmTimer ().IsExpired ())
+        {
+            logcon (F ("WiFi Failed to connect to the stronger AP"));
+            fsm_WiFi_state_ConnectionFailed_imp.Init ();
+        }
+    }
+
+    /// DEBUG_END;
+} // fsm_WiFi_state_Roaming::Poll
+
+/*****************************************************************************/
+void fsm_WiFi_state_Roaming::OnConnect ()
+{
+    // DEBUG_START;
+    fsm_WiFi_state_ConnectedToAP_imp.Init ();
+    // DEBUG_END;
+} // fsm_WiFi_state_Roaming::OnConnect
 
 /*****************************************************************************/
 /*****************************************************************************/
