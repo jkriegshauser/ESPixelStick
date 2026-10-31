@@ -167,6 +167,28 @@ c_FileMgr::~c_FileMgr ()
 
 //-----------------------------------------------------------------------------
 ///< Start the module
+#ifdef SUPPORT_BOOT_TRACE
+//-----------------------------------------------------------------------------
+// Debug aid: append one line to /boottrace.txt. Begin() keeps the previous boot's file as
+// /boottrace.prev. Read them with GET /conf/boottrace.txt and GET /conf/boottrace.prev.
+void c_FileMgr::BootTrace (const char * Stage)
+{
+    fs::File TraceFile = LittleFS.open ("/boottrace.txt", "a");
+    if (TraceFile)
+    {
+        if (TraceFile.size () < 6000)
+        {
+            TraceFile.print (millis ());
+            TraceFile.print (F (" ms heap "));
+            TraceFile.print (ESP.getFreeHeap ());
+            TraceFile.print (' ');
+            TraceFile.println (Stage);
+        }
+        TraceFile.close ();
+    }
+} // BootTrace
+#endif // def SUPPORT_BOOT_TRACE
+
 void c_FileMgr::Begin ()
 {
     // DEBUG_START;
@@ -187,6 +209,15 @@ void c_FileMgr::Begin ()
         #endif // def ARDUINO_ARCH_ESP32
 
         listDir (LittleFS, String ("/"), 3);
+#ifdef SUPPORT_BOOT_TRACE
+        LittleFS.remove ("/boottrace.prev");
+        LittleFS.rename ("/boottrace.txt", "/boottrace.prev");
+#   ifdef ARDUINO_ARCH_ESP8266
+        BootTrace ((String (F ("boot, reset reason: ")) + ESP.getResetReason () + F (" | ") + ESP.getResetInfo ()).c_str ());
+#   else
+        BootTrace ("boot");
+#   endif // def ARDUINO_ARCH_ESP8266
+#endif // def SUPPORT_BOOT_TRACE
 
         // StartSdCard();
 
@@ -441,6 +472,7 @@ void c_FileMgr::SetSpiIoPins ()
     #endif // def DEFAULT_SD_POWER_PIN
 
     FsDateTime::setCallback(dateTime);
+    BOOT_TRACE ("sd start");
 #ifdef ARDUINO_ARCH_ESP32
     // DEBUG_V();
     try
@@ -517,6 +549,7 @@ void c_FileMgr::SetSpiIoPins ()
         else
         {
             // DEBUG_V("SdCardInstalled = true");
+            BOOT_TRACE ("sd ok");
             SdCardInstalled = true;
             // DEBUG_V();
             SetSdSpeed ();
@@ -528,7 +561,14 @@ void c_FileMgr::SetSpiIoPins ()
         }
 
         // DEBUG_V();
+#ifdef SUPPORT_BOOT_TRACE
+        if (!SdCardInstalled) { BootTrace ("sd absent or failed"); }
+        uint32_t ListStartTime = millis ();
+#endif // def SUPPORT_BOOT_TRACE
         BuildFseqList(true);
+#ifdef SUPPORT_BOOT_TRACE
+        BootTrace ((String (F ("sd setup done, file list built in ")) + String (millis () - ListStartTime) + F (" ms")).c_str ());
+#endif // def SUPPORT_BOOT_TRACE
         // DEBUG_V();
     }
 #ifdef ARDUINO_ARCH_ESP32
@@ -1385,6 +1425,7 @@ bool c_FileMgr::OpenSdFile (const String & _FileName, FileMode Mode, FileId & Fi
         if (!SdCardInstalled)
         {
             // no SD card is installed
+            BOOT_TRACE ((String (F ("open: no card for ")) + FileName).c_str ());
             FileHandle = INVALID_FILE_HANDLE;
             break;
         }
@@ -1399,6 +1440,7 @@ bool c_FileMgr::OpenSdFile (const String & _FileName, FileMode Mode, FileId & Fi
             if (false == ESP_SD.exists (FileName))
             {
                 logcon (String (F ("ERROR: Cannot find '")) + FileName + F ("' for reading. File does not exist."));
+                BOOT_TRACE ((String (F ("open: not found ")) + FileName).c_str ());
                 break;
             }
         }
@@ -1443,6 +1485,7 @@ bool c_FileMgr::OpenSdFile (const String & _FileName, FileMode Mode, FileId & Fi
             if (!FileList[FileListIndex].IsOpen)
             {
                 logcon(String(F("ERROR: Could not open '")) + FileName + F("'."));
+                BOOT_TRACE ((String (F ("open: failed ")) + FileName).c_str ());
                 // release the file list entry
                  // DEBUG_FILE_HANDLE (FileHandle);
                 FileList[FileListIndex].IsOpen = false;
