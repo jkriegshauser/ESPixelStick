@@ -47,6 +47,9 @@ extern SdFat sd;
 class c_FileMgr
 {
 public:
+#ifdef SUPPORT_BOOT_TRACE
+    void BootTrace (const char * Stage);
+#endif // def SUPPORT_BOOT_TRACE
     c_FileMgr ();
     virtual ~c_FileMgr ();
 
@@ -314,3 +317,10 @@ protected:
 #endif // def DEBUG_FILE_HANDLE
 
 extern c_FileMgr FileMgr;
+
+// Boot trace markers compile to nothing unless SUPPORT_BOOT_TRACE is defined
+#ifdef SUPPORT_BOOT_TRACE
+#define BOOT_TRACE(Stage) FileMgr.BootTrace (Stage)
+#else
+#define BOOT_TRACE(Stage)
+#endif // def SUPPORT_BOOT_TRACE

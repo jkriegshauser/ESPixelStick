@@ -216,25 +216,30 @@ void setup()
     // TestHeap(uint32_t(15));
     // DEBUG_V(String("LoadConfig Heap: ") + String(ESP.getFreeHeap()));
     LoadConfig();
+    BOOT_TRACE ("config loaded");
 
     // TestHeap(uint32_t(20));
     // DEBUG_V(String("InputMgr Heap: ") + String(ESP.getFreeHeap()));
     // connect the input processing to the output processing.
     InputMgr.Begin (0);
+    BOOT_TRACE ("inputs started");
 
     // TestHeap(uint32_t(30));
     // DEBUG_V(String("OutputMgr Heap: ") + String(ESP.getFreeHeap()));
     // Set up the output manager to start sending data to the serial ports
     OutputMgr.Begin();
+    BOOT_TRACE ("outputs started");
 
     // TestHeap(uint32_t(40));
     // DEBUG_V(String("NetworkMgr Heap: ") + String(ESP.getFreeHeap()));
     NetworkMgr.Begin();
+    BOOT_TRACE ("network started");
 
     // TestHeap(uint32_t(50));
     // DEBUG_V(String("WebMgr Heap: ") + String(ESP.getFreeHeap()));
     // Configure and start the web server
     WebMgr.Begin(&config);
+    BOOT_TRACE ("web started");
 
 #ifdef SUPPORT_SENSOR_DS18B20
     // TestHeap(uint32_t(60));
@@ -244,6 +249,7 @@ void setup()
 
     // DEBUG_V(String("FPPDiscovery Heap: ") + String(ESP.getFreeHeap()));
     FPPDiscovery.begin ();
+    BOOT_TRACE ("fpp started");
 
     // DEBUG_V(String("Final Heap: ") + String(ESP.getFreeHeap()));
 
@@ -603,6 +609,18 @@ void loop()
     WebMgr.Process ();
     // DEBUG_V();
 
+#ifdef SUPPORT_BOOT_TRACE
+    {
+        // record each new heap low-water mark, in 1 KB steps
+        static uint32_t HeapLowWater = 0xFFFFFFFF;
+        uint32_t FreeHeapNow = ESP.getFreeHeap ();
+        if (FreeHeapNow + 1024 < HeapLowWater)
+        {
+            HeapLowWater = FreeHeapNow;
+            FileMgr.BootTrace ((String (F ("heap low-water ")) + String (FreeHeapNow)).c_str ());
+        }
+    }
+#endif // def SUPPORT_BOOT_TRACE
     FileMgr.Poll ();
     // DEBUG_V();
 
@@ -663,6 +681,7 @@ bool RebootInProgress()
 void RequestReboot(String & Reason, uint32_t LoopDelay, bool SkipDisable /* = false */)
 {
     GlobalRebootReason = Reason;
+    BOOT_TRACE ((String (F ("reboot requested: ")) + Reason).c_str ());
     RebootCount = LoopDelay;
     if(!SkipDisable)
     {
