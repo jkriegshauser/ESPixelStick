@@ -71,7 +71,7 @@ void ftp_callback(FtpOperation ftpOperation, uint32_t freeSpace, uint32_t totalS
         case FTP_FREE_SPACE_CHANGE:
         {
             FileMgr.BuildFseqList(false);
-            LOG_PORT.printf("FTP: Free space change, free %u of %u! Rebuilding FSEQ file list\n", freeSpace, totalSpace);
+            LOG_PORT.println (F ("FTP: Free space change. Rebuilding FSEQ file list"));
             break;
         }
 
