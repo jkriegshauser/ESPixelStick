@@ -132,6 +132,15 @@ void c_WebMgr::NetworkStateChanged (bool NewNetworkState)
 } // NetworkStateChanged
 
 //-----------------------------------------------------------------------------
+#ifdef ARDUINO_ARCH_ESP8266
+// Refuse new web connections while less than this much heap is free. Accepting one costs the
+// client and the request objects, and a failed allocation there is fatal on the ESP8266.
+#ifndef WEB_SESSION_MIN_FREE_HEAP
+#   define WEB_SESSION_MIN_FREE_HEAP (6 * 1024)
+#endif // ndef WEB_SESSION_MIN_FREE_HEAP
+#endif // def ARDUINO_ARCH_ESP8266
+
+//-----------------------------------------------------------------------------
 // Configure and start the web server
 void c_WebMgr::init ()
 {
@@ -141,6 +150,7 @@ void c_WebMgr::init ()
         {
             AsyncServer * async = new AsyncServer(HTTP_PORT);
             async->SetMaxNumOpenTcpSessions(2);
+            async->SetMinFreeHeapForNewSessions(WEB_SESSION_MIN_FREE_HEAP);
             delete async;
         }
         #endif // def ARDUINO_ARCH_ESP8266
