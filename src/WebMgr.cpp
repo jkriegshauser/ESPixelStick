@@ -31,6 +31,7 @@
 
 #include <FS.h>
 #include <LittleFS.h>
+#include <AsyncJson.h>
 
 #ifdef SUPPORT_SENSOR_DS18B20
 #include "service/SensorDS18B20.h"
@@ -766,9 +767,17 @@ void c_WebMgr::ProcessXJRequest (AsyncWebServerRequest* client)
     // DEBUG_START;
 
     // WebJsonDoc.clear ();
-    JsonDocument WebJsonDoc;
-    WebJsonDoc.to<JsonObject>();
-    JsonObject status = WebJsonDoc[(char*)CN_status].to<JsonObject> ();
+    // The document lives inside the response and is serialized straight into the TCP buffers,
+    // which avoids the String copy of the whole status and the response's own copy of that String.
+    AsyncJsonResponse * response = new (std::nothrow) AsyncJsonResponse ();
+    if (nullptr == response)
+    {
+        // Out of memory. Leave the request unanswered: the web server then replies with a small
+        // 501 on its own and the page asks again a second later. Closing the client here would
+        // delete the request while the library is still using it.
+        return;
+    }
+    JsonObject status = response->getRoot ()[(char*)CN_status].to<JsonObject> ();
     JsonObject system = status[(char*)CN_system].to<JsonObject> ();
 
     JsonWrite(system, F ("freeheap"), ESP.getFreeHeap ());
@@ -816,9 +825,15 @@ void c_WebMgr::ProcessXJRequest (AsyncWebServerRequest* client)
     // DEBUG_V ("");
 
     // DEBUG_V("Send XJ response");
-    String XjResult;
-    serializeJson(WebJsonDoc, XjResult);
-    client->send (200, CN_applicationSLASHjson, XjResult);
+    if (response->overflowed ())
+    {
+        // The document ran out of memory while it was being filled. Do not send a truncated status;
+        // the web server answers 501 and the page asks again.
+        delete response;
+        return;
+    }
+    response->setLength ();
+    client->send (response);
 
     // WebJsonDoc.clear();
     // DEBUG_END;
