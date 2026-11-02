@@ -682,9 +682,25 @@ bool RebootInProgress()
 
 void RequestReboot(String & Reason, uint32_t LoopDelay, bool SkipDisable /* = false */)
 {
-    GlobalRebootReason = Reason;
-    BOOT_TRACE ((String (F ("reboot requested: ")) + Reason).c_str ());
-    RebootCount = LoopDelay;
+    if (RebootInProgress ())
+    {
+        // A reboot is already on its way. Keep the first reason and its countdown so that the log and the
+        // boot trace name the cause, not whatever noticed the shutdown afterwards (the WiFi driver reports
+        // the connection it loses while the board goes down), and so that the restart is not pushed out
+        // again. A request that wants the restart sooner still gets that.
+        BOOT_TRACE ((String (F ("reboot already pending, kept first reason, ignored: ")) + Reason).c_str ());
+        if (LoopDelay < RebootCount)
+        {
+            RebootCount = LoopDelay;
+        }
+    }
+    else
+    {
+        GlobalRebootReason = Reason;
+        BOOT_TRACE ((String (F ("reboot requested: ")) + Reason).c_str ());
+        RebootCount = LoopDelay;
+    }
+
     if(!SkipDisable)
     {
         InputMgr.SetOperationalState(false);
