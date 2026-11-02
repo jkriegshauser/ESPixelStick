@@ -139,6 +139,12 @@ void c_WebMgr::NetworkStateChanged (bool NewNetworkState)
 #ifndef WEB_SESSION_MIN_FREE_HEAP
 #   define WEB_SESSION_MIN_FREE_HEAP (6 * 1024)
 #endif // ndef WEB_SESSION_MIN_FREE_HEAP
+// Pace the transfers of responses that are already under way by the free heap, and pause them below this
+// much. A request admitted above the floor still allocates its response chunks, and the TCP library copies
+// them, so two transfers in flight can take the heap to the bottom, where the WiFi SDK fails (#20).
+#ifndef WEB_TRANSFER_MIN_FREE_HEAP
+#   define WEB_TRANSFER_MIN_FREE_HEAP (4 * 1024)
+#endif // ndef WEB_TRANSFER_MIN_FREE_HEAP
 #endif // def ARDUINO_ARCH_ESP8266
 
 //-----------------------------------------------------------------------------
@@ -155,6 +161,8 @@ void c_WebMgr::init ()
             delete async;
             // the same floor for requests on connections that are already open (keep-alive)
             AsyncWebServer::setMinFreeHeapForRequests(WEB_SESSION_MIN_FREE_HEAP);
+            // and pace the transfers themselves, so that they stop short of the bottom of the heap
+            AsyncWebServer::setMinFreeHeapForTransfers(WEB_TRANSFER_MIN_FREE_HEAP);
         }
         #endif // def ARDUINO_ARCH_ESP8266
         // DEBUG_START;
