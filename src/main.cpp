@@ -611,13 +611,23 @@ void loop()
 
 #ifdef SUPPORT_BOOT_TRACE
     {
-        // record each new heap low-water mark, in 1 KB steps
-        static uint32_t HeapLowWater = 0xFFFFFFFF;
+        // Record each new heap low-water mark, in 1 KB steps. The mark is reached exactly when the heap
+        // is at its worst, and writing the line makes LittleFS.open() allocate, so the value and the time
+        // it was seen are kept here and written once a block is free again (#26).
+        static uint32_t HeapLowWater    = 0xFFFFFFFF;
+        static uint32_t LowWaterTime    = 0;
+        static bool     LowWaterPending = false;
         uint32_t FreeHeapNow = ESP.getFreeHeap ();
         if (FreeHeapNow + 1024 < HeapLowWater)
         {
-            HeapLowWater = FreeHeapNow;
-            FileMgr.BootTrace ((String (F ("heap low-water ")) + String (FreeHeapNow)).c_str ());
+            HeapLowWater    = FreeHeapNow;
+            LowWaterTime    = millis ();
+            LowWaterPending = true;
+        }
+        if (LowWaterPending && FileMgr.BootTraceCanWrite ())
+        {
+            LowWaterPending = false;
+            FileMgr.BootTrace ((String (F ("heap low-water ")) + String (HeapLowWater) + F (" at ") + String (LowWaterTime) + F (" ms")).c_str ());
         }
     }
 #endif // def SUPPORT_BOOT_TRACE

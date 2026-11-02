@@ -171,13 +171,45 @@ c_FileMgr::~c_FileMgr ()
 //-----------------------------------------------------------------------------
 // Debug aid: append one line to /boottrace.txt. Begin() keeps the previous boot's file as
 // /boottrace.prev. Read them with GET /conf/boottrace.txt and GET /conf/boottrace.prev.
+//
+// LittleFS.open() allocates the file object and its cache with a plain new, which is fatal on the
+// ESP8266 when it fails, and a trace line is wanted most when the heap is at its worst. A line is
+// only written while a block of BootTraceHeapReserve bytes is free; what was skipped is counted
+// and reported with the next line that gets through.
+static const uint32_t BootTraceHeapReserve  = 1024;
+static uint32_t       BootTraceLinesSkipped = 0;
+
+bool c_FileMgr::BootTraceCanWrite ()
+{
+#ifdef ARDUINO_ARCH_ESP8266
+    return ESP.getMaxFreeBlockSize () >= BootTraceHeapReserve;
+#else
+    return ESP.getMaxAllocHeap () >= BootTraceHeapReserve;
+#endif // def ARDUINO_ARCH_ESP8266
+} // BootTraceCanWrite
+
 void c_FileMgr::BootTrace (const char * Stage)
 {
+    if (!BootTraceCanWrite ())
+    {
+        BootTraceLinesSkipped++;
+        return;
+    }
+
     fs::File TraceFile = LittleFS.open ("/boottrace.txt", "a");
     if (TraceFile)
     {
         if (TraceFile.size () < 6000)
         {
+            if (BootTraceLinesSkipped)
+            {
+                TraceFile.print (millis ());
+                TraceFile.print (F (" ms heap "));
+                TraceFile.print (ESP.getFreeHeap ());
+                TraceFile.print (F (" trace lines skipped while the heap was short: "));
+                TraceFile.println (BootTraceLinesSkipped);
+                BootTraceLinesSkipped = 0;
+            }
             TraceFile.print (millis ());
             TraceFile.print (F (" ms heap "));
             TraceFile.print (ESP.getFreeHeap ());

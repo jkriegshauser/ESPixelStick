@@ -49,6 +49,7 @@ class c_FileMgr
 public:
 #ifdef SUPPORT_BOOT_TRACE
     void BootTrace (const char * Stage);
+    bool BootTraceCanWrite ();
 #endif // def SUPPORT_BOOT_TRACE
     c_FileMgr ();
     virtual ~c_FileMgr ();
