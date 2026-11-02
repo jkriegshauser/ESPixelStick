@@ -665,6 +665,18 @@ void loop()
             // loop() is in delay() corrupts the SDK timer list and the restart ends in an exception instead.
             LOG_PORT.flush ();
             ESP.restart ();
+#ifdef ARDUINO_ARCH_ESP8266
+            // On the ESP8266, ESP.restart() is system_restart() plus a suspend of this loop, and the chip
+            // resets once the SDK runs again. The WiFi teardown the SDK does on the way raises a disconnect
+            // event, and that can wake the loop before the reset. Nothing may run from here on: the WiFi
+            // driver would answer the lost connection with a reconnect into an interface the SDK has
+            // already freed and fault in netif_set_down (#28).
+            while (true)
+            {
+                FeedWDT ();
+                esp_suspend ();
+            }
+#endif // def ARDUINO_ARCH_ESP8266
         }
     }
 
