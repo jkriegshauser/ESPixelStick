@@ -826,9 +826,30 @@ void c_WebMgr::ProcessXJRequest (AsyncWebServerRequest* client)
     // DEBUG_V ("");
 
     // DEBUG_V("Send XJ response");
-    String XjResult;
-    serializeJson(WebJsonDoc, XjResult);
-    client->send (200, CN_applicationSLASHjson, XjResult);
+    // Serialize once, straight into a response buffer sized up front: no String growth and no
+    // second copy. The document is released when this function returns; the response keeps only
+    // the serialized text until it has been sent.
+    size_t JsonLength = measureJson (WebJsonDoc);
+    // The response buffer must be one contiguous block, and the library allocates it with a
+    // plain new, which is fatal on the ESP8266 when it fails. Check first, and when memory is
+    // short leave the request unanswered: the web server replies with a small 501 on its own and
+    // the page asks again a second later. Do not close the client from inside the handler; that
+    // deletes the request while the library is still using it.
+    bool OutOfMemory = WebJsonDoc.overflowed ();
+#ifdef ARDUINO_ARCH_ESP8266
+    OutOfMemory |= (ESP.getMaxFreeBlockSize () < (JsonLength + 256));
+#endif // def ARDUINO_ARCH_ESP8266
+    if (OutOfMemory)
+    {
+        return;
+    }
+    AsyncResponseStream * response = new (std::nothrow) AsyncResponseStream (CN_applicationSLASHjson, JsonLength + 1);
+    if (nullptr == response)
+    {
+        return;
+    }
+    serializeJson (WebJsonDoc, *response);
+    client->send (response);
 
     // WebJsonDoc.clear();
     // DEBUG_END;
