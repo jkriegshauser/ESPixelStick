@@ -1239,15 +1239,12 @@ void c_FileMgr::DeleteSdFile (const String & FileName)
     DeleteFlashFile(NewFilename);
 #else
     LockSd();
-    bool FileExists = ESP_SD.exists (FileName);
-    UnLockSd();
-    if (!FileExists)
+    if (!ESP_SD.exists (FileName))
     {
         // nothing to delete, so nothing to rebuild
+        UnLockSd();
         return;
     }
-    // DEBUG_V (String ("Deleting '") + FileName + "'");
-    LockSd();
     ESP_SD.remove (FileName);
     UnLockSd();
 #endif // def SIMULATE_SD
@@ -2425,12 +2422,6 @@ bool c_FileMgr::handleFileUpload (
         OutputMgr.ClearBuffer();
         OutputMgr.PauseOutputs(false);
         InputMgr.SetOperationalState(false);
-
-        if(IsCompressed(fsUploadFileName))
-        {
-            // String reason = F("Reboot after receiving a compressed file");
-            // RequestReboot(reason, 100000);
-        }
 
         fsUploadFileName.clear();
         fsUploadTempName.clear();
