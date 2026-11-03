@@ -58,6 +58,7 @@ private:
     void ProcessBlankPacket ();
     bool PlayingFile ();
 
+    AsyncWebServerRequest * pUploadRequest = nullptr; ///< the request of the upload in progress, to tell its disconnect from another one
     bool inFileUpload = false;
     bool writeFailed = false;
     bool hasBeenInitialized = false;
@@ -75,6 +76,7 @@ private:
     void BuildFseqResponse       (String fname, c_FileMgr::FileId fseq, String & resp);
     void StopPlaying             ();
     void StartPlaying            (String & FileName, float SecondsElapsed);
+    void UploadConnectionClosed  (AsyncWebServerRequest * request);
     bool AllowedToPlayRemoteFile ();
     void GetDriverName           (String & Name) { Name = "FPPD"; }
 

@@ -984,6 +984,9 @@ void c_FPPDiscovery::ProcessFile (
             SafeStrncpy(UploadFileName, filename.c_str(), sizeof(UploadFileName));
             InputMgr.SetOperationalState(false);
             OutputMgr.PauseOutputs(true);
+            // a connection that closes before the last chunk never delivers a final chunk: clean up then
+            pUploadRequest = request;
+            request->onDisconnect ([this, request] () { UploadConnectionClosed (request); });
         }
         else if(!String(UploadFileName).equals(filename))
         {
@@ -997,6 +1000,8 @@ void c_FPPDiscovery::ProcessFile (
             // DEBUG_V("New file starting. Aborting: '" + String(UploadFileName) + "' and starting '" + filename + "'");
             FileMgr.AbortSdFileUpload();
             SafeStrncpy(UploadFileName, filename.c_str(), sizeof(UploadFileName));
+            pUploadRequest = request;
+            request->onDisconnect ([this, request] () { UploadConnectionClosed (request); });
         }
 
         // DEBUG_V("Write the file block");
@@ -1012,17 +1017,13 @@ void c_FPPDiscovery::ProcessFile (
         if (final || writeFailed)
         {
             inFileUpload = false;
+            pUploadRequest = nullptr;
             memset(UploadFileName, 0x0, sizeof(UploadFileName));
             writeFailed = false;
             OutputMgr.ClearBuffer();
             InputMgr.SetOperationalState(true);
             OutputMgr.PauseOutputs(false);
-            FeedWDT();
-            SafeDelay(1000);
-            FeedWDT();
-            // DEBUG_V("Allow file to play");
-            String temp = String(UploadFileName);
-            StartPlaying(temp, 0.0);
+            // playback resumes with the master's next START, or from the configured local file
         }
 
     } while (false);
@@ -1030,6 +1031,24 @@ void c_FPPDiscovery::ProcessFile (
     // DEBUG_END;
 
 } // ProcessFile
+
+//-----------------------------------------------------------------------------
+// The connection carrying an upload closed before the last chunk of the file arrived.
+void c_FPPDiscovery::UploadConnectionClosed (AsyncWebServerRequest * request)
+{
+    if (inFileUpload && (request == pUploadRequest))
+    {
+        logcon (String (F ("Upload File: '")) + UploadFileName + F ("' connection closed before the end of the file"));
+        FileMgr.AbortSdFileUpload ();
+        inFileUpload = false;
+        pUploadRequest = nullptr;
+        memset(UploadFileName, 0x0, sizeof(UploadFileName));
+        writeFailed = false;
+        OutputMgr.ClearBuffer();
+        InputMgr.SetOperationalState(true);
+        OutputMgr.PauseOutputs(false);
+    }
+} // UploadConnectionClosed
 
 //-----------------------------------------------------------------------------
 void c_FPPDiscovery::ProcessBody (
