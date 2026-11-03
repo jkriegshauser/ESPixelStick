@@ -124,7 +124,7 @@ public:
 #define SD_BLOCK_SIZE 512
 
 #if defined ARDUINO_ARCH_ESP8266
-#   define MAX_SD_BUFFER_SIZE (4 * SD_BLOCK_SIZE)
+#   define MAX_SD_BUFFER_SIZE (7 * SD_BLOCK_SIZE) // as much of the 3,600 byte output buffer as is a whole number of sectors
 #else
 #   define MAX_SD_BUFFER_SIZE (14 * SD_BLOCK_SIZE)
 #endif
@@ -166,7 +166,8 @@ private:
     bool AddFseqListEntry (fs::File & ListFile, const String & EntryName, uint64_t EntrySize, uint16_t Date, uint16_t Time, uint32_t & numFiles, bool DisplayFileNames);
     void listDir (fs::FS& fs, String dirname, uint8_t levels);
     void DescribeSdCardToUser ();
-    void handleFileUploadNewFile (const String & filename);
+    void handleFileUploadNewFile (const String & filename, uint32_t totalLen);
+    bool FlushSdFileBuf (const FileId & FileHandle);
     void printDirectory (FsFile & dir, int numTabs);
 
     bool     SdCardInstalled = false;
@@ -181,8 +182,10 @@ private:
     #endif // def DEFAULT_SD_POWER_PIN
     FileId   fsUploadFileHandle;
     String   fsUploadFileName;
+    String   fsUploadTempName;              ///< the upload is written under this name and renamed when it is complete
     bool     fsUploadFileSavedIsEnabled = false;
     uint32_t fsUploadStartTime;
+    uint32_t fsUploadLastProgressMS = 0;
     char     FtpUserName[65] = "esps";
     char     FtpPassword[65] = "esps";
     char     WelcomeString[65] = "ESPS V4 FTP";
@@ -280,6 +283,7 @@ public: struct __attribute__((__packed__, aligned(4))) CSD {
             byte     *DataBuffer = nullptr;
             uint64_t  size = 0;
             uint64_t  offset = 0;
+            uint64_t  BytesSinceSync = 0;
         } buffer;
     };
 

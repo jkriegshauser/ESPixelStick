@@ -44,6 +44,12 @@ char XlateFileMode[3] = { CN_r[0], CN_w[0], CN_w[0] };
 oflag_t XlateFileMode[3] = { O_READ , O_WRITE | O_CREAT, O_WRITE | O_APPEND };
 #endif // def SIMULATE_SD
 
+// An upload is written under its final name plus this suffix and renamed when it is complete, so the previous
+// copy stays in place until then and a transfer that breaks off leaves nothing under the real name.
+static const char UploadTempSuffix[] = ".upload";
+// How often the directory entry of a file being uploaded is brought up to date on the card.
+static const uint32_t UploadSyncIntervalBytes = 64 * 1024;
+
 #ifdef SUPPORT_FTP
 #include <SimpleFTPServer.h>
 FtpServer   ftpSrv;
@@ -1235,13 +1241,15 @@ void c_FileMgr::DeleteSdFile (const String & FileName)
     LockSd();
     bool FileExists = ESP_SD.exists (FileName);
     UnLockSd();
-    if (FileExists)
+    if (!FileExists)
     {
-        // DEBUG_V (String ("Deleting '") + FileName + "'");
-        LockSd();
-        ESP_SD.remove (FileName);
-        UnLockSd();
+        // nothing to delete, so nothing to rebuild
+        return;
     }
+    // DEBUG_V (String ("Deleting '") + FileName + "'");
+    LockSd();
+    ESP_SD.remove (FileName);
+    UnLockSd();
 #endif // def SIMULATE_SD
     BuildFseqList(false);
 
@@ -1817,55 +1825,41 @@ uint64_t c_FileMgr::WriteSdFileBuf (const FileId& FileHandle, byte* FileData, ui
         }
         else // buffered mode
         {
-            // DEBUG_V("Using buffers");
-            // DEBUG_V(String("     NumBytesInSourceBuffer: ") + String(NumBytesInSourceBuffer));
-            uint64_t SpaceRemaining = FileList[FileListIndex].buffer.size - FileList[FileListIndex].buffer.offset;
-            // DEBUG_V(String("             SpaceRemaining: ") + String(SpaceRemaining));
-
-            if(ForceWriteToSD ||
-                  (NumBytesInSourceBuffer &&
-                  (SpaceRemaining < NumBytesInSourceBuffer)))
+            // Fill the buffer and write it only when it is full, so that every write to the card is one whole,
+            // sector aligned buffer. A call with no data writes whatever is pending (the end of an upload).
+            uint8_t * pSource   = FileData;
+            uint64_t  BytesLeft = NumBytesInSourceBuffer;
+            bool      Failed    = false;
+            do
             {
-                // DEBUG_V("Write out the buffer");
-                // delay(20);
-                // DEBUG_V(String("       BytesToBeWrittenToSD: ") + String(FileList[FileListIndex].buffer.offset));
-                FeedWDT();
-                LockSd();
-                uint64_t WroteToSdSize = FileList[FileListIndex].fsFile.write(FileList[FileListIndex].buffer.DataBuffer, FileList[FileListIndex].buffer.offset);
-                FileList[FileListIndex].fsFile.flush();
-                UnLockSd();
-                SafeDelay(30);
-                FeedWDT();
-                // DEBUG_V(String("                     offset: ") + String(FileList[FileListIndex].buffer.offset));
-                // DEBUG_V(String("              WroteToSdSize: ") + String(WroteToSdSize));
-                if(FileList[FileListIndex].buffer.offset != WroteToSdSize)
+                uint64_t SpaceRemaining = FileList[FileListIndex].buffer.size - FileList[FileListIndex].buffer.offset;
+                uint64_t BytesToCopy    = min (SpaceRemaining, BytesLeft);
+                if (BytesToCopy)
                 {
-                    logcon (String("WriteSdFileBuf:ERROR:SD Write Failed. Tried to write: ") +
-                            String(FileList[FileListIndex].buffer.offset) +
-                            " bytes. Actually wrote: " + String(WroteToSdSize))
-                    NumBytesWrittenToDestBuffer = 0;
+                    memcpy (&(FileList[FileListIndex].buffer.DataBuffer[FileList[FileListIndex].buffer.offset]), pSource, BytesToCopy);
+                    FileList[FileListIndex].buffer.offset += BytesToCopy;
+                    pSource   += BytesToCopy;
+                    BytesLeft -= BytesToCopy;
+                    NumBytesWrittenToDestBuffer += BytesToCopy;
+                }
+
+                bool BufferIsFull = (FileList[FileListIndex].buffer.offset >= FileList[FileListIndex].buffer.size);
+                if (!BufferIsFull && !ForceWriteToSD)
+                {
+                    break; // wait for more data
+                }
+
+                if (!FlushSdFileBuf (FileHandle))
+                {
+                    Failed = true;
                     break;
-                } // end write failed
-                // reset the buffer
-                FileList[FileListIndex].buffer.offset = 0;
-                // DEBUG_V(String("                 New offset: ") + String(FileList[FileListIndex].buffer.offset));
-                ForceWriteToSD = false;
-            }
+                }
+            } while (BytesLeft);
 
-            if(NumBytesInSourceBuffer)
+            if (Failed)
             {
-                // DEBUG_V(String("                    Writing ") + String(NumBytesInSourceBuffer) + " bytes to the buffer");
-                // DEBUG_V(String("                     offset: ") + String(FileList[FileListIndex].buffer.offset));
-                memcpy(&(FileList[FileListIndex].buffer.DataBuffer[FileList[FileListIndex].buffer.offset]), FileData, NumBytesInSourceBuffer);
-
-                FileList[FileListIndex].buffer.offset += NumBytesInSourceBuffer;
-                NumBytesWrittenToDestBuffer += NumBytesInSourceBuffer;
-                NumBytesInSourceBuffer -= NumBytesInSourceBuffer;
-                // DEBUG_V(String("NumBytesWrittenToDestBuffer: ") + String(NumBytesWrittenToDestBuffer));
-                // DEBUG_V(String("     NumBytesInSourceBuffer: ") + String(NumBytesInSourceBuffer));
-                // DEBUG_V(String("                 New offset: ") + String(FileList[FileListIndex].buffer.offset));
-
-            }; // End write to buffer
+                NumBytesWrittenToDestBuffer = 0;
+            }
         }
         // DEBUG_V (String (" FileHandle: ") + String (FileHandle));
         // DEBUG_V (String ("File.Handle: ") + String (FileList[FileListIndex].handle));
@@ -1876,6 +1870,62 @@ uint64_t c_FileMgr::WriteSdFileBuf (const FileId& FileHandle, byte* FileData, ui
     return NumBytesWrittenToDestBuffer;
 
 } // WriteSdFile
+
+//-----------------------------------------------------------------------------
+// Write whatever is pending in the file's buffer to the card. The directory entry is brought up to date every
+// UploadSyncIntervalBytes rather than after every buffer; CloseSdFile() completes it.
+bool c_FileMgr::FlushSdFileBuf (const FileId& FileHandle)
+{
+    // DEBUG_START;
+    bool response = false;
+    do // once
+    {
+        int FileListIndex;
+        if (-1 == (FileListIndex = FileListFindSdFileHandle (FileHandle)))
+        {
+            logcon (String (F ("FlushSdFileBuf::ERROR::Invalid File Handle: ")) + String (FileHandle));
+            break;
+        }
+
+        if (nullptr == FileList[FileListIndex].buffer.DataBuffer)
+        {
+            // nothing is buffered for this file
+            response = true;
+            break;
+        }
+
+        uint64_t BytesToWrite = FileList[FileListIndex].buffer.offset;
+        if (BytesToWrite)
+        {
+            FeedWDT();
+            LockSd();
+            uint64_t WroteToSdSize = FileList[FileListIndex].fsFile.write(FileList[FileListIndex].buffer.DataBuffer, BytesToWrite);
+            UnLockSd();
+            FeedWDT();
+            FileList[FileListIndex].buffer.offset = 0;
+            if (BytesToWrite != WroteToSdSize)
+            {
+                logcon (String("FlushSdFileBuf:ERROR:SD Write Failed. Tried to write: ") +
+                        String(BytesToWrite) +
+                        " bytes. Actually wrote: " + String(WroteToSdSize));
+                break;
+            }
+            FileList[FileListIndex].buffer.BytesSinceSync += WroteToSdSize;
+        }
+
+        if (FileList[FileListIndex].buffer.BytesSinceSync >= UploadSyncIntervalBytes)
+        {
+            FileList[FileListIndex].buffer.BytesSinceSync = 0;
+            LockSd();
+            FileList[FileListIndex].fsFile.flush();
+            UnLockSd();
+        }
+        response = true;
+    } while (false);
+
+    // DEBUG_END;
+    return response;
+} // FlushSdFileBuf
 
 //-----------------------------------------------------------------------------
 uint64_t c_FileMgr::WriteSdFile (const FileId& FileHandle, byte* FileData, uint64_t NumBytesToWrite, uint64_t StartingPosition)
@@ -2061,6 +2111,17 @@ void c_FileMgr::BuildFseqList(bool DisplayFileNames)
             memset(entryName, 0x0, sizeof(entryName));
             CurrentEntry.getName (entryName, sizeof(entryName)-1);
             String EntryName = String (entryName);
+            if (EntryName.endsWith (UploadTempSuffix))
+            {
+                // an upload that never completed, unless it is the one in progress
+                CurrentEntry.close();
+                if (!EntryName.equals (fsUploadTempName))
+                {
+                    logcon (String (F ("Removing incomplete upload '")) + EntryName + "'");
+                    ESP_SD.remove (entryName);
+                }
+                continue;
+            }
             uint16_t Date = 0;
             uint16_t Time = 0;
             CurrentEntry.getCreateDateTime (&Date, &Time);
@@ -2273,7 +2334,7 @@ bool c_FileMgr::handleFileUpload (
         if ((0 == index))
         {
             // DEBUG_V("New File");
-            handleFileUploadNewFile (filename);
+            handleFileUploadNewFile (filename, totalLen);
             expectedIndex = 0;
             // LOG_PORT.println(".");
         }
@@ -2286,13 +2347,7 @@ bool c_FileMgr::handleFileUpload (
 
                 // DEBUG_FILE_HANDLE (fsUploadFileHandle);
                 // DEBUG_V(String("fsUploadFileName: ") + fsUploadFileName);
-                CloseSdFile (fsUploadFileHandle);
-                // DEBUG_V(String("fsUploadFileName: ") + fsUploadFileName);
-                DeleteSdFile (fsUploadFileName);
-                SafeDelay(100);
-                BuildFseqList(false);
-                expectedIndex = 0;
-                fsUploadFileName.clear();
+                AbortSdFileUpload ();
             }
             break;
         }
@@ -2308,13 +2363,16 @@ bool c_FileMgr::handleFileUpload (
             // Write data
             // DEBUG_V ("UploadWrite: " + String (len) + String (" bytes"));
             bytesWritten = WriteSdFileBuf (fsUploadFileHandle, data, len);
-            // DEBUG_V (String ("Writing bytes: ") + String (index));
+            if ((millis () - fsUploadLastProgressMS) >= 5000)
+            {
+                fsUploadLastProgressMS = millis ();
 #ifdef ARDUINO_ARCH_ESP32
-            LOG_PORT.println(String("\033[Fprogress: ") + String(expectedIndex) + ", heap: " + String(heap_caps_get_largest_free_block(0x1800)));
+                uint32_t FreeHeap = heap_caps_get_largest_free_block(0x1800);
 #else
-            LOG_PORT.println(String("\033[Fprogress: ") + String(expectedIndex) + ", heap: " + String(ESP.getFreeHeap ()));
+                uint32_t FreeHeap = ESP.getFreeHeap ();
 #endif // def ARDUINO_ARCH_ESP32
-            LOG_PORT.flush();
+                logcon (String (F ("Upload File: '")) + fsUploadFileName + F ("' ") + String (expectedIndex) + F (" of ") + String (totalLen) + F (" bytes, heap ") + String (FreeHeap));
+            }
         }
         // PauseSdFile(fsUploadFile);
 
@@ -2322,10 +2380,7 @@ bool c_FileMgr::handleFileUpload (
         {
             // DEBUG_V("Write failed. Stop transfer");
             // DEBUG_FILE_HANDLE (fsUploadFileHandle);
-            CloseSdFile(fsUploadFileHandle);
-            DeleteSdFile (fsUploadFileName);
-            expectedIndex = 0;
-            fsUploadFileName.clear();
+            AbortSdFileUpload ();
             break;
         }
         response = true;
@@ -2333,32 +2388,44 @@ bool c_FileMgr::handleFileUpload (
 
     if ((true == final) && (fsUploadFileHandle != INVALID_FILE_HANDLE))
     {
-        // DEBUG_V(String("fsUploadFileName: ") + String(fsUploadFileName));
-        // cause the remainder in the buffer to be written.
-        WriteSdFileBuf (fsUploadFileHandle, data, 0);
-        uint32_t uploadTime = (uint32_t)(millis() - fsUploadStartTime) / 1000;
+        // write the remainder in the buffer, then complete the file
+        bool Complete = FlushSdFileBuf (fsUploadFileHandle);
+        uint32_t uploadTimeMS = (uint32_t)(millis() - fsUploadStartTime);
         FeedWDT();
-         // DEBUG_FILE_HANDLE (fsUploadFileHandle);
         CloseSdFile (fsUploadFileHandle);
 
-        logcon (String (F ("Upload File: '")) + fsUploadFileName +
-                F ("' Done (") + String (uploadTime) +
-                F ("s). Received: ") + String(expectedIndex) +
-                F(" Bytes out of ") + String(totalLen) +
-                F(" bytes. FileLen: ") + GetSdFileSize(filename));
+        if (Complete && totalLen && (expectedIndex != totalLen))
+        {
+            logcon (String (F ("Upload File: '")) + fsUploadFileName + F ("' ERROR: received ") + String (expectedIndex) + F (" of ") + String (totalLen) + F (" bytes"));
+            Complete = false;
+        }
+
+        if (Complete)
+        {
+            // the previous copy under the real name goes away only now
+            RenameSdFile (fsUploadTempName, fsUploadFileName);
+            uint32_t RateKBps = (uploadTimeMS) ? uint32_t ((uint64_t (expectedIndex) * 1000) / (uint64_t (uploadTimeMS) * 1024)) : 0;
+            logcon (String (F ("Upload File: '")) + fsUploadFileName +
+                    F ("' Done (") + String (uploadTimeMS / 1000) + F ("s, ") + String (RateKBps) +
+                    F (" KB/s). Received: ") + String(expectedIndex) +
+                    F(" Bytes out of ") + String(totalLen) +
+                    F(" bytes. FileLen: ") + GetSdFileSize(fsUploadFileName));
+            FeedWDT();
+            BuildFseqList(false);
+        }
+        else
+        {
+            DeleteSdFile (fsUploadTempName);
+            response = false;
+        }
 
         FeedWDT();
         expectedIndex = 0;
-
-        SafeDelay(100);
-        BuildFseqList(false);
 
         OutputMgr.ClearBuffer();
         OutputMgr.PauseOutputs(false);
         InputMgr.SetOperationalState(false);
 
-        // DEBUG_V(String("Expected: ") + String(totalLen));
-        // DEBUG_V(String("     Got: ") + String(GetSdFileSize(fsUploadFileName)));
         if(IsCompressed(fsUploadFileName))
         {
             // String reason = F("Reboot after receiving a compressed file");
@@ -2366,6 +2433,7 @@ bool c_FileMgr::handleFileUpload (
         }
 
         fsUploadFileName.clear();
+        fsUploadTempName.clear();
     }
 
     // DEBUG_END;
@@ -2373,33 +2441,30 @@ bool c_FileMgr::handleFileUpload (
 } // handleFileUpload
 
 //-----------------------------------------------------------------------------
-void c_FileMgr::handleFileUploadNewFile (const String & filename)
+void c_FileMgr::handleFileUploadNewFile (const String & filename, uint32_t totalLen)
 {
     // DEBUG_START;
     // DEBUG_V ("UploadStart: " + filename);
 
-    fsUploadStartTime = millis();
-    // DEBUG_V(String("filename: ") + String(filename));
-
-    // are we terminating the previous download?
+    // are we terminating the previous upload?
     if (!fsUploadFileName.isEmpty())
     {
         logcon (String (F ("Aborting Previous File Upload For: '")) + fsUploadFileName + String (F ("'")));
-        // DEBUG_FILE_HANDLE (fsUploadFileHandle);
-        CloseSdFile (fsUploadFileHandle);
+        AbortSdFileUpload ();
     }
 
-    // Set up to receive a file
-    fsUploadFileName.clear();
-    fsUploadFileName = filename;
+    // Set up to receive a file. It is written under a temporary name and renamed when it is complete.
+    fsUploadStartTime      = millis();
+    fsUploadLastProgressMS = fsUploadStartTime;
+    fsUploadFileName       = filename;
+    fsUploadTempName       = filename + UploadTempSuffix;
 
-    logcon (String (F ("Upload File: '")) + fsUploadFileName + String (F ("' Started")));
+    logcon (String (F ("Upload File: '")) + fsUploadFileName + F ("' Started (") + String (totalLen) + F (" bytes)"));
 
-    DeleteSdFile (fsUploadFileName);
+    DeleteSdFile (fsUploadTempName);
 
     // Open the file for writing
-    // DEBUG_V(String("fsUploadFileName: ") + String(fsUploadFileName));
-    OpenSdFile (fsUploadFileName, FileMode::FileWrite, fsUploadFileHandle, -1 /*first access*/);
+    OpenSdFile (fsUploadTempName, FileMode::FileWrite, fsUploadFileHandle, -1 /*first access*/);
     int FileListIndex;
     if (-1 == (FileListIndex = FileListFindSdFileHandle (fsUploadFileHandle)))
     {
@@ -2407,8 +2472,24 @@ void c_FileMgr::handleFileUploadNewFile (const String & filename)
     }
     else
     {
+#ifndef SIMULATE_SD
+        if (totalLen)
+        {
+            // Allocate the whole file in one piece up front: the cluster chain is not extended one cluster at a
+            // time while the data arrives, and the file is contiguous on the card afterward, which keeps seeks
+            // during playback cheap.
+            LockSd();
+            bool PreAllocated = FileList[FileListIndex].fsFile.preAllocate (totalLen);
+            UnLockSd();
+            if (!PreAllocated)
+            {
+                logcon (String (F ("Upload File: '")) + fsUploadFileName + F ("' could not be allocated in one piece (") + String (totalLen) + F (" bytes), writing it piecemeal"));
+            }
+        }
+#endif // ndef SIMULATE_SD
         // DEBUG_V("Use the output buffer as a data buffer");
         FileList[FileListIndex].buffer.offset = 0;
+        FileList[FileListIndex].buffer.BytesSinceSync = 0;
         FileList[FileListIndex].buffer.size = min(uint32_t(OutputMgr.GetBufferSize() & ~(SD_BLOCK_SIZE - 1)), uint32_t(MAX_SD_BUFFER_SIZE));
         FileList[FileListIndex].buffer.DataBuffer = OutputMgr.ISR_GetBufferAddress();
         OutputMgr.PauseOutputs(true);
@@ -2526,6 +2607,15 @@ void c_FileMgr::AbortSdFileUpload()
         // DEBUG_FILE_HANDLE (fsUploadFileHandle);
         CloseSdFile(fsUploadFileHandle);
     }
+
+    // the partial file goes away; the previous copy under the real name was never touched
+    if (!fsUploadTempName.isEmpty())
+    {
+        DeleteSdFile (fsUploadTempName);
+    }
+    fsUploadFileName.clear();
+    fsUploadTempName.clear();
+    expectedIndex = 0;
 
     // DEBUG_END;
 } // AbortSdFileUpload
