@@ -28,6 +28,9 @@
 #include <umm_malloc/umm_malloc_cfg.h>
 #endif // def ARDUINO_ARCH_ESP8266
 
+// A START or SYNC from the master older than this when an upload ends is not worth resuming from.
+static const uint32_t ResumeAfterUploadMaxAgeMS = 5000;
+
 #ifdef ARDUINO_ARCH_ESP32
 #   define FPP_TYPE_ID          0xC3
 #   define FPP_VARIANT_NAME     (String(CN_ESPixelStick) + "-ESP32")
@@ -295,13 +298,6 @@ void c_FPPDiscovery::ProcessReceivedUdpPacket (AsyncUDPPacket & UDPpacket)
 
     do // once
     {
-        // We're in an upload, can't be bothered
-        if (inFileUpload)
-        {
-            // DEBUG_V ("In Upload, Ignore message");
-            break;
-        }
-
         FPPPacket* fppPacket = reinterpret_cast<FPPPacket*>(UDPpacket.data ());
         // DEBUG_V (String ("Received UDP packet from: ") + UDPpacket.remoteIP ().toString ());
         // DEBUG_V (String ("                 Sent to: ") + UDPpacket.localIP ().toString ());
@@ -452,6 +448,12 @@ void c_FPPDiscovery::ProcessSyncPacket (uint8_t action, String FileName, float S
     // DEBUG_START;
     do // once
     {
+        if (inFileUpload)
+        {
+            // where to pick the show up again when the upload is done
+            RememberSyncDuringUpload (action, FileName, SecondsElapsed);
+        }
+
         if (!AllowedToPlayRemoteFile ())
         {
             // DEBUG_V ("Not allowed to play remote files");
@@ -979,11 +981,18 @@ void c_FPPDiscovery::ProcessFile (
             // DEBUG_V("wait for the player to become idle");
             // DEBUG_V (String ("ContentLength: ") + String (ContentLength));
             // DEBUG_V("Stop Input");
-            StopPlaying();
+            // The upload buffers its data in the end of the output buffer when the configured outputs leave
+            // enough of it free, and the show keeps running. Otherwise it takes the whole buffer, as it always did.
+            UploadStoppedOutputs = FileMgr.SdFileUploadStopsOutputs();
+            if (UploadStoppedOutputs)
+            {
+                StopPlaying();
+                InputMgr.SetOperationalState(false);
+                OutputMgr.PauseOutputs(true);
+            }
             inFileUpload = true;
+            UploadSyncValid = false;
             SafeStrncpy(UploadFileName, filename.c_str(), sizeof(UploadFileName));
-            InputMgr.SetOperationalState(false);
-            OutputMgr.PauseOutputs(true);
             // a connection that closes before the last chunk never delivers a final chunk: clean up then
             pUploadRequest = request;
             request->onDisconnect ([this, request] () { UploadConnectionClosed (request); });
@@ -1004,6 +1013,12 @@ void c_FPPDiscovery::ProcessFile (
             request->onDisconnect ([this, request] () { UploadConnectionClosed (request); });
         }
 
+        if (final && !UploadStoppedOutputs && InputFPPRemote && InputFPPRemote->IsPlayingFile (String (UploadFileName)))
+        {
+            // the copy being played is about to be replaced: close it before the rename; the new one is resumed below
+            StopPlaying ();
+        }
+
         // DEBUG_V("Write the file block");
         writeFailed = !FileMgr.handleFileUpload (UploadFileName, index, data, len, final, ContentLength);
 
@@ -1016,14 +1031,7 @@ void c_FPPDiscovery::ProcessFile (
         // DEBUG_V();
         if (final || writeFailed)
         {
-            inFileUpload = false;
-            pUploadRequest = nullptr;
-            memset(UploadFileName, 0x0, sizeof(UploadFileName));
-            writeFailed = false;
-            OutputMgr.ClearBuffer();
-            InputMgr.SetOperationalState(true);
-            OutputMgr.PauseOutputs(false);
-            // playback resumes with the master's next START, or from the configured local file
+            UploadEnded ();
         }
 
     } while (false);
@@ -1040,15 +1048,78 @@ void c_FPPDiscovery::UploadConnectionClosed (AsyncWebServerRequest * request)
     {
         logcon (String (F ("Upload File: '")) + UploadFileName + F ("' connection closed before the end of the file"));
         FileMgr.AbortSdFileUpload ();
-        inFileUpload = false;
-        pUploadRequest = nullptr;
-        memset(UploadFileName, 0x0, sizeof(UploadFileName));
-        writeFailed = false;
+        UploadEnded ();
+    }
+} // UploadConnectionClosed
+
+//-----------------------------------------------------------------------------
+// The upload is over, complete or not: put back whatever it took, and pick the show up where the master is.
+void c_FPPDiscovery::UploadEnded ()
+{
+    // DEBUG_START;
+
+    inFileUpload = false;
+    pUploadRequest = nullptr;
+    memset(UploadFileName, 0x0, sizeof(UploadFileName));
+    writeFailed = false;
+    if (UploadStoppedOutputs)
+    {
+        UploadStoppedOutputs = false;
         OutputMgr.ClearBuffer();
         InputMgr.SetOperationalState(true);
         OutputMgr.PauseOutputs(false);
     }
-} // UploadConnectionClosed
+    ResumePlaybackAfterUpload ();
+
+    // DEBUG_END;
+} // UploadEnded
+
+//-----------------------------------------------------------------------------
+void c_FPPDiscovery::RememberSyncDuringUpload (uint8_t action, const String & FileName, float SecondsElapsed)
+{
+    if ((SYNC_PKT_START == action) || (SYNC_PKT_SYNC == action))
+    {
+        SafeStrncpy (UploadSyncFileName, FileName.c_str (), sizeof (UploadSyncFileName));
+        UploadSyncSecondsElapsed = SecondsElapsed;
+        UploadSyncReceivedMS = millis ();
+        UploadSyncValid = true;
+    }
+    else if (SYNC_PKT_STOP == action)
+    {
+        UploadSyncValid = false;
+    }
+} // RememberSyncDuringUpload
+
+//-----------------------------------------------------------------------------
+// The master kept sending START or SYNC while the upload ran and nothing is playing now (the upload stopped the
+// player, or replaced the sequence it was playing): pick the sequence up where the master is, instead of
+// staying dark until the next START.
+void c_FPPDiscovery::ResumePlaybackAfterUpload ()
+{
+    // DEBUG_START;
+
+    do // once
+    {
+        if (!UploadSyncValid)
+        {
+            break;
+        }
+        UploadSyncValid = false;
+
+        uint32_t AgeMS = millis () - UploadSyncReceivedMS;
+        if ((AgeMS > ResumeAfterUploadMaxAgeMS) || PlayingFile ())
+        {
+            break;
+        }
+
+        String FileName (UploadSyncFileName);
+        float SecondsElapsed = UploadSyncSecondsElapsed + (float (AgeMS) / 1000.0f);
+        logcon (String (F ("Upload done: resuming '")) + FileName + F ("' at ") + String (SecondsElapsed, 1) + F (" s"));
+        StartPlaying (FileName, SecondsElapsed);
+    } while (false);
+
+    // DEBUG_END;
+} // ResumePlaybackAfterUpload
 
 //-----------------------------------------------------------------------------
 void c_FPPDiscovery::ProcessBody (
@@ -1529,9 +1600,9 @@ void c_FPPDiscovery::StartPlaying (String & FileName, float SecondsElapsed)
         }
         // DEBUG_V (emptyString);
 
-        if (inFileUpload)
+        if (inFileUpload && UploadStoppedOutputs)
         {
-            // DEBUG_V ("Uploading");
+            // DEBUG_V ("Uploading, and the upload has the output buffer");
             break;
         }
         // DEBUG_V (emptyString);

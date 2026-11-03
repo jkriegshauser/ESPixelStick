@@ -74,6 +74,9 @@ public:
     void      WriteChannelData  (uint32_t StartChannelId, uint32_t ChannelCount, uint8_t * pData);
     void      ReadChannelData   (uint32_t StartChannelId, uint32_t ChannelCount, uint8_t *pTargetData);
     void      ClearBuffer       ();
+    uint32_t  GetBufferTailSize () { return (UsedBufferSize < GetBufferSize ()) ? GetBufferSize () - UsedBufferSize : 0; } ///< bytes at the end of the buffer that no configured output uses
+    uint8_t * ReserveBufferTail (uint32_t Size); ///< lend the last Size bytes of the buffer to a file upload while the outputs keep running; nullptr when they are in use
+    void      ReleaseBufferTail ();              ///< the upload is done with the end of the buffer
     void      TaskPoll          ();
     void      RelayUpdate       (uint8_t RelayId, String & NewValue, String & Response);
     void      ClearStatistics   (void);
@@ -184,6 +187,7 @@ private:
 
     uint8_t    *pOutputBuffer = nullptr;
     uint32_t   UsedBufferSize = 0;
+    uint32_t   ReservedTailSize = 0; ///< bytes at the end of the buffer lent to a file upload; ClearBuffer() leaves them alone
 
     #ifndef DEFAULT_CONSOLE_TX_GPIO
     #define DEFAULT_CONSOLE_TX_GPIO gpio_num_t::GPIO_NUM_1

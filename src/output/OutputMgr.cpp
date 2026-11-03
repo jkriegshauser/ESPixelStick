@@ -1826,11 +1826,45 @@ void c_OutputMgr::ClearBuffer()
 {
     // DEBUG_START;
 
-    memset(ISR_GetBufferAddress(), 0x00, OutputMgr.GetBufferSize());
+    // the end of the buffer may be lent to a file upload: see ReserveBufferTail()
+    memset(ISR_GetBufferAddress(), 0x00, GetBufferSize() - ReservedTailSize);
 
     // DEBUG_END;
 
 } // ClearBuffer
+
+//-----------------------------------------------------------------------------
+// Lend the last Size bytes of the output buffer to a file upload. No configured output reads them and no input
+// writes them (every input is clamped to GetBufferUsedSize()), so the outputs keep running while the upload
+// fills them. ClearBuffer() leaves them alone until ReleaseBufferTail().
+uint8_t * c_OutputMgr::ReserveBufferTail (uint32_t Size)
+{
+    // DEBUG_START;
+    uint8_t * Response = nullptr;
+
+    if ((0 == ReservedTailSize) && (0 != Size) && (Size <= GetBufferTailSize ()))
+    {
+        ReservedTailSize = Size;
+        Response = ISR_GetBufferAddress () + GetBufferSize () - Size;
+    }
+
+    // DEBUG_END;
+    return Response;
+} // ReserveBufferTail
+
+//-----------------------------------------------------------------------------
+void c_OutputMgr::ReleaseBufferTail ()
+{
+    // DEBUG_START;
+
+    if (ReservedTailSize)
+    {
+        memset (ISR_GetBufferAddress () + GetBufferSize () - ReservedTailSize, 0x00, ReservedTailSize);
+        ReservedTailSize = 0;
+    }
+
+    // DEBUG_END;
+} // ReleaseBufferTail
 
 // create a global instance of the output channel factory
 c_OutputMgr OutputMgr;
