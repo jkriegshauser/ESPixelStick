@@ -58,9 +58,9 @@ private:
     void ProcessBlankPacket ();
     bool PlayingFile ();
 
+    AsyncWebServerRequest * pUploadRequest = nullptr; ///< the request of the upload in progress, to tell its disconnect from another one
     bool inFileUpload = false;
     bool writeFailed = false;
-    AsyncWebServerRequest * pUploadRequest = nullptr; ///< the request of the upload in progress, to tell its disconnect from another one
     bool hasBeenInitialized = false;
     bool IsEnabled = false;
     bool BlankOnStop = false;
