@@ -794,6 +794,24 @@ void c_InputMgr::Process ()
 } // Process
 
 //-----------------------------------------------------------------------------
+// Called from loop(): the SD card work of the players, kept out of the Process() ticker on the ESP8266 (#20).
+void c_InputMgr::ProcessDeferredFileWork ()
+{
+    if (configInProgress || PauseProcessing)
+    {
+        return;
+    }
+
+    for (auto & CurrentInput : InputChannelDrivers)
+    {
+        if (CurrentInput.DriverInUse)
+        {
+            ((c_InputCommon*)(CurrentInput.InputDriver))->ProcessDeferredFileWork ();
+        }
+    }
+} // ProcessDeferredFileWork
+
+//-----------------------------------------------------------------------------
 void c_InputMgr::ProcessButtonActions (c_ExternalInput::InputValue_t value)
 {
     // DEBUG_START;

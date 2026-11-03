@@ -490,6 +490,135 @@ void c_InputFPPRemotePlayFile::ClearControlFileInfo()
     // DEBUG_END;
 } // ClearFileInfo
 
+//-----------------------------------------------------------------------------
+// The second half of the Starting state: open and parse the file, then play it. Runs from loop() on the
+// ESP8266 (ProcessDeferredFileWork) and in place on the ESP32.
+void c_InputFPPRemotePlayFile::FinishStart ()
+{
+    // DEBUG_START;
+
+    bool Parsed = ParseFseqFile ();
+
+    do // once
+    {
+        if ((pCurrentFsmState != &fsm_PlayFile_state_Starting_imp) || !StartRequested)
+        {
+            // stopped, or restarted with another file, while this one was being opened: nothing to continue
+            if (c_FileMgr::INVALID_FILE_HANDLE != FileControl[CurrentFile].FileHandleForFileBeingPlayed)
+            {
+                FileMgr.CloseSdFile (FileControl[CurrentFile].FileHandleForFileBeingPlayed);
+            }
+            break;
+        }
+
+        StartRequested = false;
+
+        if (!Parsed)
+        {
+            // DEBUG_V("FSEQ Parse Error");
+            fsm_PlayFile_state_Error_imp.Init (this);
+            break;
+        }
+
+        FileControl[CurrentFile].RemainingPlayCount --;
+        FileControl[CurrentFile].LastPollTimeMS = millis();
+        FileControl[CurrentFile].StartingTimeMS = FileControl[CurrentFile].LastPollTimeMS - FileControl[CurrentFile].ElapsedPlayTimeMS;
+        FileControl[CurrentFile].LastPlayedFrameId = CalculateFrameId (FileControl[CurrentFile].ElapsedPlayTimeMS, GetSyncOffsetMS ());
+
+        // DEBUG_V (String ("                FileName: ") + FileControl[CurrentFile].FileName);
+        // DEBUG_V (String ("       ElapsedPlayTimeMS: ") + FileControl[CurrentFile].ElapsedPlayTimeMS);
+        // DEBUG_V (String ("          LastPollTimeMS: ") + FileControl[CurrentFile].LastPollTimeMS);
+        // DEBUG_V (String ("          StartingTimeMS: ") + FileControl[CurrentFile].StartingTimeMS);
+        // DEBUG_V (String ("      RemainingPlayCount: ") + FileControl[CurrentFile].RemainingPlayCount);
+        // DEBUG_V (String ("       LastPlayedFrameId: ") + FileControl[CurrentFile].LastPlayedFrameId);
+        // DEBUG_V (String ("NumberOfFramesInSequence: ") + FileControl[CurrentFile].TotalNumberOfFramesInSequence);
+
+        fsm_PlayFile_state_PlayingFile_imp.Init (this);
+
+    } while (false);
+
+    // DEBUG_END;
+} // FinishStart
+
+//-----------------------------------------------------------------------------
+// Read one frame into the output buffer. Runs from loop() on the ESP8266 and in place on the ESP32.
+void c_InputFPPRemotePlayFile::ReadFrame (uint32_t FrameId)
+{
+    //xDEBUG_START;
+
+    uint32_t FilePosition = FileControl[CurrentFile].DataOffset + (FileControl[CurrentFile].ChannelsPerFrame * FrameId);
+    uint32_t BufferSize = OutputMgr.GetBufferUsedSize();
+    uint32_t MaxBytesToRead = (FileControl[CurrentFile].ChannelsPerFrame > BufferSize) ? BufferSize : FileControl[CurrentFile].ChannelsPerFrame;
+
+    uint32_t CurrentOutputBufferOffset = 0;
+    //xDEBUG_V (String ("               MaxBytesToRead: ") + String (MaxBytesToRead));
+
+    for (auto& CurrentSparseRange : SparseRanges)
+    {
+        uint32_t ActualBytesToRead = min (MaxBytesToRead, CurrentSparseRange.ChannelCount);
+        if (0 == ActualBytesToRead)
+        {
+            // no data to read for this range
+            continue;
+        }
+
+        uint32_t AdjustedFilePosition = FilePosition + CurrentSparseRange.DataOffset;
+
+        //xDEBUG_V (String ("                 FilePosition: ") + String (FilePosition));
+        //xDEBUG_V (String ("         AdjustedFilePosition: ") + String (uint32_t(AdjustedFilePosition), HEX));
+        //xDEBUG_V (String ("    CurrentOutputBufferOffset: ") + String (uint32_t(CurrentOutputBufferOffset), HEX));
+        //xDEBUG_V (String ("            ActualBytesToRead: ") + String (ActualBytesToRead));
+        //xDEBUG_FILE_HANDLE(FileControl[CurrentFile].FileHandleForFileBeingPlayed);
+        uint32_t ActualBytesRead = ReadFile(CurrentOutputBufferOffset, ActualBytesToRead, AdjustedFilePosition);
+        //xDEBUG_FILE_HANDLE(FileControl[CurrentFile].FileHandleForFileBeingPlayed);
+
+        MaxBytesToRead -= ActualBytesRead;
+        CurrentOutputBufferOffset += ActualBytesRead;
+
+        if (ActualBytesRead != ActualBytesToRead)
+        {
+            // DEBUG_V (String ("TotalNumberOfFramesInSequence: ") + String (FileControl[CurrentFile].TotalNumberOfFramesInSequence));
+            // DEBUG_V (String ("                 FrameId: ") + String (FrameId));
+            // DEBUG_V (String ("            ActualBytesToRead: ") + String (ActualBytesToRead));
+            // DEBUG_V (String ("              ActualBytesRead: ") + String (ActualBytesRead));
+            logcon (F ("File Playback Failed to read enough data"));
+            Stop ();
+        }
+    }
+
+    //xDEBUG_END;
+} // ReadFrame
+
+//-----------------------------------------------------------------------------
+// Called from loop(): the SD card work the state machine asked for from the input ticker.
+void c_InputFPPRemotePlayFile::ProcessDeferredFileWork ()
+{
+    if (InputIsPaused ())
+    {
+        return;
+    }
+
+    if (StartRequested && (pCurrentFsmState == &fsm_PlayFile_state_Starting_imp))
+    {
+        // FinishStart() clears StartRequested once the file is open, and leaves the state machine alone
+        // when the file was stopped or replaced while it was being opened
+        FileWorkInProgress = true;
+        FinishStart ();
+        FileWorkInProgress = false;
+    }
+
+    if (FrameRequested)
+    {
+        FrameRequested = false;
+        if (pCurrentFsmState == &fsm_PlayFile_state_PlayingFile_imp)
+        {
+            FileWorkInProgress = true;
+            ReadFrame (RequestedFrameId);
+            FileWorkInProgress = false;
+        }
+    }
+} // ProcessDeferredFileWork
+
 #ifdef DEBUG_FSEQ
 uint32_t NextFileOffset = 0;
 uint32_t NextChannelOffset = 0;

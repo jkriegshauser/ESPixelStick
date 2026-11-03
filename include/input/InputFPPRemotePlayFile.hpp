@@ -41,6 +41,7 @@ public:
     virtual void GetStatus (JsonObject & jsonStatus);
     virtual void ClearStatistics ();
     virtual bool IsIdle () { return (pCurrentFsmState == &fsm_PlayFile_state_Idle_imp); }
+    virtual void ProcessDeferredFileWork ();
 
 #ifdef ARDUINO_ARCH_ESP32
     TaskHandle_t GetTaskHandle () { return TimerPollTaskHandle; }
@@ -51,6 +52,22 @@ private:
 #define ELAPSED_PLAY_TIMER_INTERVAL_MS  10
 
     void ClearControlFileInfo ();
+
+    // On the ESP8266 the input manager runs from a Ticker, in the SDK's timer context, where a wait on the
+    // SD card holds up the network stack and loop() (#20). There the state machine only decides what has
+    // to happen; the file open and the frame reads are done from loop() by ProcessDeferredFileWork().
+    // The ESP32 runs the input manager in its own task and does that work in place.
+#ifdef ARDUINO_ARCH_ESP8266
+    static constexpr bool DeferFileWork = true;
+#else
+    static constexpr bool DeferFileWork = false;
+#endif // def ARDUINO_ARCH_ESP8266
+    volatile bool     StartRequested     = false; ///< Starting: the control block is set up, open and parse the file
+    volatile bool     FrameRequested     = false; ///< PlayingFile: read RequestedFrameId
+    volatile uint32_t RequestedFrameId   = 0;
+    volatile bool     FileWorkInProgress = false; ///< loop() is inside FinishStart or ReadFrame
+    void FinishStart ();
+    void ReadFrame (uint32_t FrameId);
 
     friend class fsm_PlayFile_state_Idle;
     friend class fsm_PlayFile_state_Starting;

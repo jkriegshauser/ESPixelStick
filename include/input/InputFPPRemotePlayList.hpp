@@ -37,6 +37,7 @@ public:
     virtual void Stop  ();
     virtual void Sync  (String & FileName, float SecondsElapsed);
     virtual bool Poll  ();
+    virtual void ProcessDeferredFileWork ();
     virtual void GetStatus (JsonObject & jsonStatus);
     virtual void ClearStatistics ();
     virtual bool IsIdle () { return (pCurrentFsmState == &fsm_PlayList_state_Idle_imp); }
