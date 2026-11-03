@@ -2480,7 +2480,8 @@ void c_FileMgr::handleFileUploadNewFile (const String & filename, uint32_t total
         // DEBUG_V("Use the output buffer as a data buffer");
         FileList[FileListIndex].buffer.offset = 0;
         FileList[FileListIndex].buffer.BytesSinceSync = 0;
-        FileList[FileListIndex].buffer.size = min(uint32_t(OutputMgr.GetBufferSize() & ~(SD_BLOCK_SIZE - 1)), uint32_t(MAX_SD_BUFFER_SIZE));
+        // the output buffer holds a whole SD write buffer; OutputMgr.cpp checks that at compile time
+        FileList[FileListIndex].buffer.size = MAX_SD_BUFFER_SIZE;
         FileList[FileListIndex].buffer.DataBuffer = OutputMgr.ISR_GetBufferAddress();
         OutputMgr.PauseOutputs(true);
         InputMgr.SetOperationalState(false);
