@@ -1239,14 +1239,13 @@ void c_FileMgr::DeleteSdFile (const String & FileName)
     DeleteFlashFile(NewFilename);
 #else
     LockSd();
-    if (!ESP_SD.exists (FileName))
+    bool Removed = ESP_SD.remove (FileName);
+    UnLockSd();
+    if (!Removed)
     {
-        // nothing to delete, so nothing to rebuild
-        UnLockSd();
+        // nothing was deleted (the file was not there), so nothing to rebuild
         return;
     }
-    ESP_SD.remove (FileName);
-    UnLockSd();
 #endif // def SIMULATE_SD
     BuildFseqList(false);
 
