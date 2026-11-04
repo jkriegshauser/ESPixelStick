@@ -593,6 +593,12 @@ void c_InputFPPRemotePlayFile::ReadFrame (uint32_t FrameId)
 // Called from loop(): the SD card work the state machine asked for from the input ticker.
 void c_InputFPPRemotePlayFile::ProcessDeferredFileWork ()
 {
+    if (!DeferFileWork)
+    {
+        // the ESP32 does this work in place: the input task may be inside FinishStart() right now, with StartRequested still set
+        return;
+    }
+
     if (InputIsPaused ())
     {
         return;
