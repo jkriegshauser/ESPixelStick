@@ -57,6 +57,7 @@ public:
     void SetConfig            (const char * NewConfig);
     void SetConfig            (ArduinoJson::JsonDocument & NewConfig);
     void Process              ();
+    void ProcessDeferredFileWork ();
     void SetBufferInfo        (uint32_t BufferSize);
     void SetOperationalState  (bool Active);
     void NetworkStateChanged  (bool IsConnected);

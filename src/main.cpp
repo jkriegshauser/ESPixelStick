@@ -606,6 +606,9 @@ void loop()
     OutputMgr.Poll ();
     // DEBUG_V();
 
+    // the players' SD card work, kept out of the input ticker's SDK timer context on the ESP8266
+    InputMgr.ProcessDeferredFileWork ();
+
     WebMgr.Process ();
     // DEBUG_V();
 
