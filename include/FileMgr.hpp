@@ -66,6 +66,7 @@ public:
 
     bool    handleFileUpload (const String & filename, size_t index, uint8_t * data, size_t len, bool final, uint32_t totalLen);
     void    AbortSdFileUpload();
+    bool    SdFileUploadStopsOutputs (); ///< true when an upload has to take the whole output buffer, and the outputs pause for it
 
     typedef std::function<void (JsonDocument& json)> DeserializationHandler;
 
@@ -168,6 +169,7 @@ private:
     void DescribeSdCardToUser ();
     void handleFileUploadNewFile (const String & filename, uint32_t totalLen);
     bool FlushSdFileBuf (const FileId & FileHandle);
+    uint32_t UploadBufferTailSize ();
     void printDirectory (FsFile & dir, int numTabs);
 
     bool     SdCardInstalled = false;
@@ -184,6 +186,8 @@ private:
     String   fsUploadFileName;
     String   fsUploadTempName;              ///< the upload is written under this name and renamed when it is complete
     bool     fsUploadFileSavedIsEnabled = false;
+    bool     fsUploadPausedOutputs = false; ///< the upload took the whole output buffer and paused the outputs
+    uint32_t fsUploadTailSizeDecision = UINT32_MAX; ///< the buffer size SdFileUploadStopsOutputs() decided on for the next upload, UINT32_MAX when it was not asked
     uint32_t fsUploadStartTime;
     uint32_t fsUploadLastProgressMS = 0;
     char     FtpUserName[65] = "esps";
@@ -278,6 +282,7 @@ public: struct __attribute__((__packed__, aligned(4))) CSD {
         String      Filename;
         FileMode    mode = FileMode::FileRead;
         bool        IsOpen = false;
+        bool        IsOutputBufferTail = false; ///< the buffer is the end of the output buffer, lent by OutputMgr::ReserveBufferTail()
         struct
         {
             byte     *DataBuffer = nullptr;

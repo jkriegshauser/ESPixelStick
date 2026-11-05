@@ -742,6 +742,12 @@ bool c_InputFPPRemote::AllowedToPlayRemoteFile()
 } // AllowedToPlayRemoteFile
 
 //-----------------------------------------------------------------------------
+bool c_InputFPPRemote::IsPlayingFile (const String & FileName)
+{
+    return PlayingFile () && !pInputFPPRemotePlayItem->IsIdle () && FileName.equals (pInputFPPRemotePlayItem->GetFileName ());
+} // IsPlayingFile
+
+//-----------------------------------------------------------------------------
 void c_InputFPPRemote::SetBlankTimerIsRunning (bool BlankTimerRunning)
 {
     // DEBUG_START;

@@ -59,14 +59,19 @@ private:
     bool PlayingFile ();
 
     AsyncWebServerRequest * pUploadRequest = nullptr; ///< the request of the upload in progress, to tell its disconnect from another one
+    uint32_t UploadSyncReceivedMS = 0;     ///< when the master's latest START or SYNC arrived while an upload ran
+    float    UploadSyncSecondsElapsed = 0; ///< and where in the sequence the master was then
     bool inFileUpload = false;
     bool writeFailed = false;
+    bool UploadStoppedOutputs = false; ///< the upload in progress took the whole output buffer: the player was stopped and the outputs paused for it
+    bool UploadSyncValid = false;      ///< UploadSync* hold a START or SYNC seen during the upload in progress
     bool hasBeenInitialized = false;
     bool IsEnabled = false;
     bool BlankOnStop = false;
     bool StopInProgress = false;
     char ConfiguredFileToPlay[65];
     char UploadFileName[65];
+    char UploadSyncFileName[65]; ///< the sequence of the master's latest START or SYNC while an upload ran
     IPAddress FppRemoteIp = IPAddress (uint32_t(0));
     c_InputFPPRemote * InputFPPRemote = nullptr;
     const IPAddress MulticastAddress = IPAddress (239, 70, 80, 80);
@@ -77,6 +82,9 @@ private:
     void StopPlaying             ();
     void StartPlaying            (String & FileName, float SecondsElapsed);
     void UploadConnectionClosed  (AsyncWebServerRequest * request);
+    void UploadEnded             ();
+    void RememberSyncDuringUpload (uint8_t action, const String & FileName, float SecondsElapsed);
+    void ResumePlaybackAfterUpload ();
     bool AllowedToPlayRemoteFile ();
     void GetDriverName           (String & Name) { Name = "FPPD"; }
 
