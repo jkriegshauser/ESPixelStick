@@ -170,6 +170,7 @@ private:
     void handleFileUploadNewFile (const String & filename, uint32_t totalLen);
     bool FlushSdFileBuf (const FileId & FileHandle);
     uint32_t UploadBufferTailSize ();
+    void ResumeOutputsAfterUpload ();
     void printDirectory (FsFile & dir, int numTabs);
 
     bool     SdCardInstalled = false;

@@ -2438,14 +2438,7 @@ bool c_FileMgr::handleFileUpload (
 
         FeedWDT();
         expectedIndex = 0;
-
-        if (fsUploadPausedOutputs)
-        {
-            fsUploadPausedOutputs = false;
-            OutputMgr.ClearBuffer();
-            OutputMgr.PauseOutputs(false);
-            InputMgr.SetOperationalState(false);
-        }
+        ResumeOutputsAfterUpload ();
 
         fsUploadFileName.clear();
         fsUploadTempName.clear();
@@ -2454,6 +2447,24 @@ bool c_FileMgr::handleFileUpload (
     // DEBUG_END;
     return response;
 } // handleFileUpload
+
+//-----------------------------------------------------------------------------
+// The upload that took the whole output buffer is over, complete or not: the buffer goes back to the outputs and
+// the inputs run again. Nothing to do after an upload that ran in the tail of the buffer.
+void c_FileMgr::ResumeOutputsAfterUpload ()
+{
+    // DEBUG_START;
+
+    if (fsUploadPausedOutputs)
+    {
+        fsUploadPausedOutputs = false;
+        OutputMgr.ClearBuffer ();
+        InputMgr.SetOperationalState (true);
+        OutputMgr.PauseOutputs (false);
+    }
+
+    // DEBUG_END;
+} // ResumeOutputsAfterUpload
 
 //-----------------------------------------------------------------------------
 // The upload buffer an upload starting now would get while the show keeps running: whole sectors at the end of
@@ -2470,7 +2481,8 @@ uint32_t c_FileMgr::UploadBufferTailSize ()
 } // UploadBufferTailSize
 
 //-----------------------------------------------------------------------------
-// Asked by FPPDiscovery before it hands over the first chunk; the decision holds for that upload.
+// Asked by FPPDiscovery before it hands over the first chunk of a file, so that it can stop the player first when
+// the whole buffer is needed; the decision holds for the file that follows.
 bool c_FileMgr::SdFileUploadStopsOutputs ()
 {
     fsUploadTailSizeDecision = UploadBufferTailSize ();
@@ -2673,6 +2685,7 @@ void c_FileMgr::AbortSdFileUpload()
     fsUploadFileName.clear();
     fsUploadTempName.clear();
     expectedIndex = 0;
+    ResumeOutputsAfterUpload ();
 
     // DEBUG_END;
 } // AbortSdFileUpload

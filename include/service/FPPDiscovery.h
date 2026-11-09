@@ -69,7 +69,6 @@ private:
     float    UploadSyncSecondsElapsed = 0; ///< and where in the sequence the master was then
     bool inFileUpload = false;
     bool writeFailed = false;
-    bool UploadStoppedOutputs = false; ///< the upload in progress took the whole output buffer: the player was stopped and the outputs paused for it
     bool UploadSyncValid = false;      ///< UploadSync* hold a START or SYNC seen during the upload in progress
     bool hasBeenInitialized = false;
     bool IsEnabled = false;

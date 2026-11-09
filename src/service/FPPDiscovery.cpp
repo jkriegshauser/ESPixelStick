@@ -969,18 +969,7 @@ void c_FPPDiscovery::ProcessFile (
             }
             // DEBUG_V (String ("         name: ") + filename);
             // DEBUG_V(String("Current CPU ID: ") + String(xPortGetCoreID()));
-            // DEBUG_V("wait for the player to become idle");
             // DEBUG_V (String ("ContentLength: ") + String (ContentLength));
-            // DEBUG_V("Stop Input");
-            // The upload buffers its data in the end of the output buffer when the configured outputs leave
-            // enough of it free, and the show keeps running. Otherwise it takes the whole buffer, as it always did.
-            UploadStoppedOutputs = FileMgr.SdFileUploadStopsOutputs();
-            if (UploadStoppedOutputs)
-            {
-                StopPlaying();
-                InputMgr.SetOperationalState(false);
-                OutputMgr.PauseOutputs(true);
-            }
             inFileUpload = true;
             UploadSyncValid = false;
             SafeStrncpy(UploadFileName, filename.c_str(), sizeof(UploadFileName));
@@ -1004,7 +993,21 @@ void c_FPPDiscovery::ProcessFile (
             request->onDisconnect ([this, request] () { UploadConnectionClosed (request); });
         }
 
-        if (final && !UploadStoppedOutputs && InputFPPRemote && InputFPPRemote->IsPlayingFile (String (UploadFileName)))
+        if (0 == index)
+        {
+            // The upload buffers its data in the end of the output buffer when the configured outputs leave enough of
+            // it free, and the show keeps running. Otherwise it takes the whole buffer, as it always did: FileMgr pauses
+            // the outputs and the inputs for it and puts them back when the upload is over, complete or not. The player
+            // has to be gone before the first chunk lands in its buffer. Decided for every file, so a file that
+            // replaces an upload in progress gets its own decision.
+            if (FileMgr.SdFileUploadStopsOutputs ())
+            {
+                // DEBUG_V("wait for the player to become idle");
+                StopPlaying ();
+            }
+        }
+
+        if (final && InputFPPRemote && InputFPPRemote->IsPlayingFile (String (UploadFileName)))
         {
             // the copy being played is about to be replaced: close it before the rename; the new one is resumed below
             StopPlaying ();
@@ -1044,7 +1047,8 @@ void c_FPPDiscovery::UploadConnectionClosed (AsyncWebServerRequest * request)
 } // UploadConnectionClosed
 
 //-----------------------------------------------------------------------------
-// The upload is over, complete or not: put back whatever it took, and pick the show up where the master is.
+// The upload is over, complete or not. FileMgr has put back whatever it took from the outputs and the inputs by
+// now; pick the show up where the master is.
 void c_FPPDiscovery::UploadEnded ()
 {
     // DEBUG_START;
@@ -1053,13 +1057,6 @@ void c_FPPDiscovery::UploadEnded ()
     pUploadRequest = nullptr;
     memset(UploadFileName, 0x0, sizeof(UploadFileName));
     writeFailed = false;
-    if (UploadStoppedOutputs)
-    {
-        UploadStoppedOutputs = false;
-        OutputMgr.ClearBuffer();
-        InputMgr.SetOperationalState(true);
-        OutputMgr.PauseOutputs(false);
-    }
     ResumePlaybackAfterUpload ();
 
     // DEBUG_END;
@@ -1587,13 +1584,6 @@ void c_FPPDiscovery::StartPlaying (String & FileName, float SecondsElapsed)
         if (!IsEnabled)
         {
             // DEBUG_V ("Not Enabled");
-            break;
-        }
-        // DEBUG_V (emptyString);
-
-        if (inFileUpload && UploadStoppedOutputs)
-        {
-            // DEBUG_V ("Uploading, and the upload has the output buffer");
             break;
         }
         // DEBUG_V (emptyString);
