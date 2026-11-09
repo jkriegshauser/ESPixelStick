@@ -49,7 +49,6 @@ class c_InputFPPRemote : public c_InputCommon
       void StartPlaying (String & FileName, time_t SecondsElapsed, bool IsRemote);
       void StopPlaying ();
       void FppSyncRemoteFilePlay  (String & FileName, uint32_t ElapsedTimeMS);
-      bool FppResumeRemoteFilePlay (String & FileName, float SecondsElapsed); ///< after an upload: bring the remote player back if needed and sync it to where the master is
       void GetFppRemotePlayStatus (JsonObject& jsonStatus);
       bool IsIdle();
       bool AllowedToPlayRemoteFile();

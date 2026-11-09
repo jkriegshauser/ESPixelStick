@@ -705,33 +705,6 @@ void c_InputFPPRemote::FppSyncRemoteFilePlay (String & FileName, uint32_t Elapse
 } // FppSyncRemoteFilePlay
 
 //-----------------------------------------------------------------------------
-// Pick a sequence up where the FPP master is once an upload is over. The stop for the upload took the player
-// down, and a SYNC has nothing to land on until Process() brings the player back on its next pass: do that here,
-// then sync it the way a SYNC packet from the master would. (A START only resets the player; the SYNC after it is
-// what starts the sequence at the master's position.) True when the player was told where to go.
-bool c_InputFPPRemote::FppResumeRemoteFilePlay (String & FileName, float SecondsElapsed)
-{
-    // DEBUG_START;
-
-    bool Response = false;
-
-    if (!PlayingFile ())
-    {
-        String temp = String (ConfiguredFileToPlay);
-        StartPlaying (temp, 0, FppSyncOverride);
-    }
-
-    if (AllowedToPlayRemoteFile ())
-    {
-        pInputFPPRemotePlayItem->Sync (FileName, SecondsElapsed);
-        Response = true;
-    }
-
-    // DEBUG_END;
-    return Response;
-} // FppResumeRemoteFilePlay
-
-//-----------------------------------------------------------------------------
 void c_InputFPPRemote::GetFppRemotePlayStatus (JsonObject& jsonStatus)
 {
     // DEBUG_START;

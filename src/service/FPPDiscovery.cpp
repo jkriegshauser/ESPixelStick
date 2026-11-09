@@ -28,9 +28,6 @@
 #include <umm_malloc/umm_malloc_cfg.h>
 #endif // def ARDUINO_ARCH_ESP8266
 
-// A START or SYNC from the master older than this when an upload ends is not worth resuming from.
-static const uint32_t ResumeAfterUploadMaxAgeMS = 5000;
-
 #define FPP_DISCOVERY_PORT 32320
 static const String ulrCommand  = "command";
 static const String ulrPath     = "path";
@@ -439,12 +436,6 @@ void c_FPPDiscovery::ProcessSyncPacket (uint8_t action, String FileName, float S
     // DEBUG_START;
     do // once
     {
-        if (inFileUpload)
-        {
-            // where to pick the show up again when the upload is done
-            RememberSyncDuringUpload (action, FileName, SecondsElapsed);
-        }
-
         if (!AllowedToPlayRemoteFile ())
         {
             // DEBUG_V ("Not allowed to play remote files");
@@ -971,7 +962,6 @@ void c_FPPDiscovery::ProcessFile (
             // DEBUG_V(String("Current CPU ID: ") + String(xPortGetCoreID()));
             // DEBUG_V (String ("ContentLength: ") + String (ContentLength));
             inFileUpload = true;
-            UploadSyncValid = false;
             SafeStrncpy(UploadFileName, filename.c_str(), sizeof(UploadFileName));
             // a connection that closes before the last chunk never delivers a final chunk: clean up then
             pUploadRequest = request;
@@ -1009,7 +999,8 @@ void c_FPPDiscovery::ProcessFile (
 
         if (final && InputFPPRemote && InputFPPRemote->IsPlayingFile (String (UploadFileName)))
         {
-            // the copy being played is about to be replaced: close it before the rename; the new one is resumed below
+            // the copy being played is about to be replaced: close it before the rename; the new one starts on the
+            // master's next SYNC
             StopPlaying ();
         }
 
@@ -1048,7 +1039,7 @@ void c_FPPDiscovery::UploadConnectionClosed (AsyncWebServerRequest * request)
 
 //-----------------------------------------------------------------------------
 // The upload is over, complete or not. FileMgr has put back whatever it took from the outputs and the inputs by
-// now; pick the show up where the master is.
+// now; a sequence the master is playing starts again on its next SYNC.
 void c_FPPDiscovery::UploadEnded ()
 {
     // DEBUG_START;
@@ -1057,61 +1048,9 @@ void c_FPPDiscovery::UploadEnded ()
     pUploadRequest = nullptr;
     memset(UploadFileName, 0x0, sizeof(UploadFileName));
     writeFailed = false;
-    ResumePlaybackAfterUpload ();
 
     // DEBUG_END;
 } // UploadEnded
-
-//-----------------------------------------------------------------------------
-void c_FPPDiscovery::RememberSyncDuringUpload (uint8_t action, const String & FileName, float SecondsElapsed)
-{
-    if ((SYNC_PKT_START == action) || (SYNC_PKT_SYNC == action))
-    {
-        SafeStrncpy (UploadSyncFileName, FileName.c_str (), sizeof (UploadSyncFileName));
-        UploadSyncSecondsElapsed = SecondsElapsed;
-        UploadSyncReceivedMS = millis ();
-        UploadSyncValid = true;
-    }
-    else if (SYNC_PKT_STOP == action)
-    {
-        UploadSyncValid = false;
-    }
-} // RememberSyncDuringUpload
-
-//-----------------------------------------------------------------------------
-// The master kept sending START or SYNC while the upload ran and nothing is playing now (the upload stopped the
-// player, or replaced the sequence it was playing): pick the sequence up where the master is now, instead of
-// waiting for the master's next SYNC.
-void c_FPPDiscovery::ResumePlaybackAfterUpload ()
-{
-    // DEBUG_START;
-
-    do // once
-    {
-        if (!UploadSyncValid)
-        {
-            break;
-        }
-        UploadSyncValid = false;
-
-        uint32_t AgeMS = millis () - UploadSyncReceivedMS;
-        if ((AgeMS > ResumeAfterUploadMaxAgeMS) || PlayingFile () || !IsEnabled || !InputFPPRemote || !FileMgr.SdCardIsInstalled ())
-        {
-            break;
-        }
-
-        String FileName (UploadSyncFileName);
-        float SecondsElapsed = UploadSyncSecondsElapsed + (float (AgeMS) / 1000.0f);
-        // not StartPlaying(): that only gets the player ready, the way a START packet does. The sequence starts on the
-        // SYNC after it, so the saved one goes to the player directly.
-        if (InputFPPRemote->FppResumeRemoteFilePlay (FileName, SecondsElapsed))
-        {
-            logcon (String (F ("Upload done: resuming '")) + FileName + F ("' at ") + String (SecondsElapsed, 1) + F (" s"));
-        }
-    } while (false);
-
-    // DEBUG_END;
-} // ResumePlaybackAfterUpload
 
 //-----------------------------------------------------------------------------
 void c_FPPDiscovery::ProcessBody (
