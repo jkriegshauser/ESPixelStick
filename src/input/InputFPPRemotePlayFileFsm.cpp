@@ -122,38 +122,34 @@ bool fsm_PlayFile_state_Starting::Poll ()
     // DEBUG_START;
     // DEBUG_V("fsm_PlayFile_state_Starting::Poll");
 
+    bool Response = false;
+
     do // once
     {
-        p_Parent->FileControl[CurrentFile] = p_Parent->FileControl[NextFile];
-        p_Parent->ClearControlFileInfo();
-        p_Parent->SyncControl.LastRcvdElapsedSeconds = 0.0;
-
-        if (!p_Parent->ParseFseqFile ())
+        if (p_Parent->StartRequested || p_Parent->FileWorkInProgress)
         {
-            // DEBUG_V("fsm_PlayFile_state_PlayingFile::Poll FSEQ Parse Error");
-            p_Parent->fsm_PlayFile_state_Error_imp.Init(p_Parent);
+            // loop() is still opening this file, or still busy with the previous one
             break;
         }
 
-        p_Parent->FileControl[CurrentFile].RemainingPlayCount --;
-        p_Parent->FileControl[CurrentFile].LastPollTimeMS = millis();
-        p_Parent->FileControl[CurrentFile].StartingTimeMS = p_Parent->FileControl[CurrentFile].LastPollTimeMS - p_Parent->FileControl[CurrentFile].ElapsedPlayTimeMS;
-        p_Parent->FileControl[CurrentFile].LastPlayedFrameId = p_Parent->CalculateFrameId (p_Parent->FileControl[CurrentFile].ElapsedPlayTimeMS, p_Parent->GetSyncOffsetMS ());
+        p_Parent->FileControl[CurrentFile] = p_Parent->FileControl[NextFile];
+        p_Parent->ClearControlFileInfo();
+        p_Parent->SyncControl.LastRcvdElapsedSeconds = 0.0;
+        p_Parent->StartRequested = true;
 
-        // DEBUG_V (String ("                FileName: ") + p_Parent->FileControl[CurrentFile].FileName);
-        // DEBUG_V (String ("       ElapsedPlayTimeMS: ") + p_Parent->FileControl[CurrentFile].ElapsedPlayTimeMS);
-        // DEBUG_V (String ("          LastPollTimeMS: ") + p_Parent->FileControl[CurrentFile].LastPollTimeMS);
-        // DEBUG_V (String ("          StartingTimeMS: ") + p_Parent->FileControl[CurrentFile].StartingTimeMS);
-        // DEBUG_V (String ("      RemainingPlayCount: ") + p_Parent->FileControl[CurrentFile].RemainingPlayCount);
-        // DEBUG_V (String ("       LastPlayedFrameId: ") + p_Parent->FileControl[CurrentFile].LastPlayedFrameId);
-        // DEBUG_V (String ("NumberOfFramesInSequence: ") + p_Parent->FileControl[CurrentFile].TotalNumberOfFramesInSequence);
+        if (p_Parent->DeferFileWork)
+        {
+            // loop() opens the file, see ProcessDeferredFileWork()
+            break;
+        }
 
-        p_Parent->fsm_PlayFile_state_PlayingFile_imp.Init (p_Parent);
+        p_Parent->FinishStart ();
+        Response = true;
 
     } while (false);
 
     // DEBUG_END;
-    return true;
+    return Response;
 
 } // fsm_PlayFile_state_Starting::Poll
 
@@ -165,6 +161,7 @@ void fsm_PlayFile_state_Starting::Init (c_InputFPPRemotePlayFile* Parent)
 
     p_Parent = Parent;
     Parent->pCurrentFsmState = &(Parent->fsm_PlayFile_state_Starting_imp);
+    p_Parent->StartRequested = false;
 
     if(p_Parent->SendFppSync)
     {
@@ -295,52 +292,22 @@ bool fsm_PlayFile_state_PlayingFile::Poll ()
         }
         p_Parent->FileControl[CurrentFile].LastPlayedFrameId = CurrentFrame;
 
-        uint32_t FilePosition = p_Parent->FileControl[CurrentFile].DataOffset + (p_Parent->FileControl[CurrentFile].ChannelsPerFrame * CurrentFrame);
-        uint32_t BufferSize = OutputMgr.GetBufferUsedSize();
-        uint32_t MaxBytesToRead = (p_Parent->FileControl[CurrentFile].ChannelsPerFrame > BufferSize) ? BufferSize : p_Parent->FileControl[CurrentFile].ChannelsPerFrame;
-
-        uint32_t CurrentOutputBufferOffset = 0;
-        //xDEBUG_V (String ("               MaxBytesToRead: ") + String (MaxBytesToRead));
-
         InputMgr.RestartBlankTimer (p_Parent->GetInputChannelId ());
-        //xDEBUG_V();
 
         if(p_Parent->SendFppSync)
         {
             FPPDiscovery.GenerateFppSyncMsg(SYNC_PKT_SYNC, p_Parent->GetFileName(), CurrentFrame, float(p_Parent->FileControl[CurrentFile].ElapsedPlayTimeMS) / 1000.0);
         }
 
-        for (auto& CurrentSparseRange : p_Parent->SparseRanges)
+        if (p_Parent->DeferFileWork)
         {
-            uint32_t ActualBytesToRead = min (MaxBytesToRead, CurrentSparseRange.ChannelCount);
-            if (0 == ActualBytesToRead)
-            {
-                // no data to read for this range
-                continue;
-            }
-
-            uint32_t AdjustedFilePosition = FilePosition + CurrentSparseRange.DataOffset;
-
-            //xDEBUG_V (String ("                 FilePosition: ") + String (FilePosition));
-            //xDEBUG_V (String ("         AdjustedFilePosition: ") + String (uint32_t(AdjustedFilePosition), HEX));
-            //xDEBUG_V (String ("    CurrentOutputBufferOffset: ") + String (uint32_t(CurrentOutputBufferOffset), HEX));
-            //xDEBUG_V (String ("            ActualBytesToRead: ") + String (ActualBytesToRead));
-            //xDEBUG_FILE_HANDLE(p_Parent->FileControl[CurrentFile].FileHandleForFileBeingPlayed);
-            uint32_t ActualBytesRead = p_Parent->ReadFile(CurrentOutputBufferOffset, ActualBytesToRead, AdjustedFilePosition);
-            //xDEBUG_FILE_HANDLE(p_Parent->FileControl[CurrentFile].FileHandleForFileBeingPlayed);
-
-            MaxBytesToRead -= ActualBytesRead;
-            CurrentOutputBufferOffset += ActualBytesRead;
-
-            if (ActualBytesRead != ActualBytesToRead)
-            {
-                // DEBUG_V (String ("TotalNumberOfFramesInSequence: ") + String (p_Parent->FileControl[CurrentFile].TotalNumberOfFramesInSequence));
-                // DEBUG_V (String ("                 CurrentFrame: ") + String (CurrentFrame));
-                // DEBUG_V (String ("            ActualBytesToRead: ") + String (ActualBytesToRead));
-                // DEBUG_V (String ("              ActualBytesRead: ") + String (ActualBytesRead));
-                logcon (F ("File Playback Failed to read enough data"));
-                Stop ();
-            }
+            // loop() reads the frame; a frame still pending when the next one is due is skipped
+            p_Parent->RequestedFrameId = CurrentFrame;
+            p_Parent->FrameRequested   = true;
+        }
+        else
+        {
+            p_Parent->ReadFrame (CurrentFrame);
         }
 
     } while (false);
@@ -358,6 +325,7 @@ void fsm_PlayFile_state_PlayingFile::Init (c_InputFPPRemotePlayFile* Parent)
 
     p_Parent = Parent;
     Parent->pCurrentFsmState = &(Parent->fsm_PlayFile_state_PlayingFile_imp);
+    p_Parent->FrameRequested = false;
 
     // DEBUG_END;
 
@@ -501,6 +469,12 @@ bool fsm_PlayFile_state_Stopping::Poll ()
 
     // DEBUG_V (String ("FileHandleForFileBeingPlayed: ") + String (p_Parent->FileControl[CurrentFile].FileHandleForFileBeingPlayed));
 
+    if (p_Parent->FileWorkInProgress)
+    {
+        // loop() is still using the file: close it on the next poll
+        return false;
+    }
+
     if(c_FileMgr::INVALID_FILE_HANDLE != p_Parent->FileControl[CurrentFile].FileHandleForFileBeingPlayed)
     {
         // DEBUG_FILE_HANDLE (p_Parent->FileControl[CurrentFile].FileHandleForFileBeingPlayed);
@@ -588,6 +562,12 @@ bool fsm_PlayFile_state_Error::Poll ()
 {
     //xDEBUG_START;
     //xDEBUG_V("fsm_PlayFile_state_Error::Poll");
+
+    if (p_Parent->FileWorkInProgress)
+    {
+        // loop() is still using the file: close it on the next poll
+        return false;
+    }
 
     if(c_FileMgr::INVALID_FILE_HANDLE != p_Parent->FileControl[CurrentFile].FileHandleForFileBeingPlayed)
     {

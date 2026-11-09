@@ -71,6 +71,7 @@ public:
     virtual void     GetStatus      (JsonObject & jsonStatus) = 0;
     virtual void     ClearStatistics () {PlayedFileCount = 0;}
     virtual bool     IsIdle         () = 0;
+    virtual void     ProcessDeferredFileWork () {}  ///< SD card work done from loop(), see c_InputFPPRemotePlayFile
             uint32_t GetPlayedFileCount () {return PlayedFileCount;}
             void     SetPlayedFileCount (uint32_t value) {PlayedFileCount = value;}
             String   GetFileName    () { return String(FileControl[CurrentFile].FileName); }

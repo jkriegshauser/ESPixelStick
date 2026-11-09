@@ -39,6 +39,7 @@ class c_InputFPPRemote : public c_InputCommon
       void GetStatus (JsonObject& jsonStatus);
       void ClearStatistics ();
       void Process   ();
+      void ProcessDeferredFileWork ();
       void GetDriverName (String& sDriverName) { sDriverName = "FPP Remote"; } ///< get the name for the instantiated driver
       void SetBufferInfo (uint32_t BufferSize);
       void ProcessButtonActions(c_ExternalInput::InputValue_t value);

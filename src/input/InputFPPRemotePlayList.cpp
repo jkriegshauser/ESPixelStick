@@ -103,6 +103,15 @@ bool c_InputFPPRemotePlayList::Poll ()
 } // Poll
 
 //-----------------------------------------------------------------------------
+void c_InputFPPRemotePlayList::ProcessDeferredFileWork ()
+{
+    if (pInputFPPRemotePlayItem)
+    {
+        pInputFPPRemotePlayItem->ProcessDeferredFileWork ();
+    }
+} // ProcessDeferredFileWork
+
+//-----------------------------------------------------------------------------
 void c_InputFPPRemotePlayList::GetStatus (JsonObject & jsonStatus)
 {
     // DEBUG_START;
