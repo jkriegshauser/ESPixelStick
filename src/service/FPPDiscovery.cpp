@@ -1080,8 +1080,8 @@ void c_FPPDiscovery::RememberSyncDuringUpload (uint8_t action, const String & Fi
 
 //-----------------------------------------------------------------------------
 // The master kept sending START or SYNC while the upload ran and nothing is playing now (the upload stopped the
-// player, or replaced the sequence it was playing): pick the sequence up where the master is, instead of
-// staying dark until the next START.
+// player, or replaced the sequence it was playing): pick the sequence up where the master is now, instead of
+// waiting for the master's next SYNC.
 void c_FPPDiscovery::ResumePlaybackAfterUpload ()
 {
     // DEBUG_START;
@@ -1095,15 +1095,19 @@ void c_FPPDiscovery::ResumePlaybackAfterUpload ()
         UploadSyncValid = false;
 
         uint32_t AgeMS = millis () - UploadSyncReceivedMS;
-        if ((AgeMS > ResumeAfterUploadMaxAgeMS) || PlayingFile ())
+        if ((AgeMS > ResumeAfterUploadMaxAgeMS) || PlayingFile () || !IsEnabled || !InputFPPRemote || !FileMgr.SdCardIsInstalled ())
         {
             break;
         }
 
         String FileName (UploadSyncFileName);
         float SecondsElapsed = UploadSyncSecondsElapsed + (float (AgeMS) / 1000.0f);
-        logcon (String (F ("Upload done: resuming '")) + FileName + F ("' at ") + String (SecondsElapsed, 1) + F (" s"));
-        StartPlaying (FileName, SecondsElapsed);
+        // not StartPlaying(): that only gets the player ready, the way a START packet does. The sequence starts on the
+        // SYNC after it, so the saved one goes to the player directly.
+        if (InputFPPRemote->FppResumeRemoteFilePlay (FileName, SecondsElapsed))
+        {
+            logcon (String (F ("Upload done: resuming '")) + FileName + F ("' at ") + String (SecondsElapsed, 1) + F (" s"));
+        }
     } while (false);
 
     // DEBUG_END;
