@@ -539,6 +539,10 @@ void c_FPPDiscovery::ProcessBlankPacket ()
 {
     // DEBUG_START;
 
+    // the master wants the lights off, so an upload in progress has nothing to pick up when it ends. Dropped even
+    // while the inputs are paused for the upload, when the rest of this packet is ignored.
+    UploadSyncValid = false;
+
     if (IsEnabled)
     {
         // DEBUG_V("Blanking is enabled");
