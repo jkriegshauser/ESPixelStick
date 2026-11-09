@@ -314,6 +314,15 @@ bool c_InputFPPRemote::Poll ()
 } // Poll
 
 //-----------------------------------------------------------------------------
+void c_InputFPPRemote::ProcessDeferredFileWork ()
+{
+    if (pInputFPPRemotePlayItem && IsInputChannelActive)
+    {
+        pInputFPPRemotePlayItem->ProcessDeferredFileWork ();
+    }
+} // ProcessDeferredFileWork
+
+//-----------------------------------------------------------------------------
 void c_InputFPPRemote::ProcessButtonActions(c_ExternalInput::InputValue_t value)
 {
     // DEBUG_START;

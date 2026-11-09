@@ -837,29 +837,39 @@ void c_WebMgr::ProcessXJRequest (AsyncWebServerRequest* client)
     // DEBUG_V ("");
 
     // DEBUG_V("Send XJ response");
-    // Serialize once, straight into a response buffer sized up front: no String growth and no
-    // second copy. The document is released when this function returns; the response keeps only
-    // the serialized text until it has been sent.
-    size_t JsonLength = measureJson (WebJsonDoc);
-    // The response buffer must be one contiguous block, and the library allocates it with a
-    // plain new, which is fatal on the ESP8266 when it fails. Check first, and when memory is
-    // short leave the request unanswered: the web server replies with a small 501 on its own and
-    // the page asks again a second later. Do not close the client from inside the handler; that
-    // deletes the request while the library is still using it.
+    // Serialize into a String reserved at the size of the previous reply, so that it does not grow by
+    // reallocation while the document is still alive, then release the document before the response
+    // is built: the heap peak is the document plus one copy of the text, not the document plus a
+    // growing String plus the copy inside the response.
+    static size_t LastXjLength = 1024;
+    String XjResult;
+    if (!XjResult.reserve (LastXjLength + 32))
+    {
+        // no memory for the reply: the web server answers 501 on its own and the page asks again
+        return;
+    }
+    serializeJson (WebJsonDoc, XjResult);
+    LastXjLength = XjResult.length ();
     bool OutOfMemory = WebJsonDoc.overflowed ();
+    WebJsonDoc.clear ();
+
+    // The response copies the text into one contiguous block, and the library allocates the response
+    // with a plain new, which is fatal on the ESP8266 when it fails. Check first and build the response
+    // without throwing; when memory is short leave the request unanswered: the web server replies with
+    // a small 501 on its own and the page asks again a second later. Do not close the client from
+    // inside the handler; that deletes the request while the library is still using it.
 #ifdef ARDUINO_ARCH_ESP8266
-    OutOfMemory |= (ESP.getMaxFreeBlockSize () < (JsonLength + 256));
+    OutOfMemory |= (ESP.getMaxFreeBlockSize () < (XjResult.length () + 256));
 #endif // def ARDUINO_ARCH_ESP8266
     if (OutOfMemory)
     {
         return;
     }
-    AsyncResponseStream * response = new (std::nothrow) AsyncResponseStream (CN_applicationSLASHjson, JsonLength + 1);
+    AsyncWebServerResponse * response = new (std::nothrow) AsyncBasicResponse (200, CN_applicationSLASHjson, XjResult.c_str ());
     if (nullptr == response)
     {
         return;
     }
-    serializeJson (WebJsonDoc, *response);
     client->send (response);
 
     // WebJsonDoc.clear();
