@@ -52,6 +52,7 @@ class c_InputFPPRemote : public c_InputCommon
       void GetFppRemotePlayStatus (JsonObject& jsonStatus);
       bool IsIdle();
       bool AllowedToPlayRemoteFile();
+      bool IsPlayingFile (const String & FileName); ///< the player has this sequence open
 
 protected:
 

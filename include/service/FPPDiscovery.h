@@ -83,6 +83,7 @@ private:
     void StopPlaying             ();
     void StartPlaying            (String & FileName, float SecondsElapsed);
     void UploadConnectionClosed  (AsyncWebServerRequest * request);
+    void UploadEnded             ();
     bool AllowedToPlayRemoteFile ();
     void GetDriverName           (String & Name) { Name = "FPPD"; }
 

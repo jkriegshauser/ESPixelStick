@@ -49,6 +49,24 @@ oflag_t XlateFileMode[3] = { O_READ , O_WRITE | O_CREAT, O_WRITE | O_APPEND };
 static const char UploadTempSuffix[] = ".upload";
 // How often the directory entry of a file being uploaded is brought up to date on the card.
 static const uint32_t UploadSyncIntervalBytes = 64 * 1024;
+// An upload buffers its data in the end of the output buffer that no configured output uses, so the show keeps
+// running while the file arrives. With fewer whole sectors than this back there, the upload takes the whole
+// output buffer instead and the outputs pause, as they always did.
+#ifndef UPLOAD_KEEP_PLAYING_MIN_BYTES
+#   define UPLOAD_KEEP_PLAYING_MIN_BYTES (2 * SD_BLOCK_SIZE)
+#endif // ndef UPLOAD_KEEP_PLAYING_MIN_BYTES
+#ifndef UPLOAD_TAIL_MAX_BYTES
+#   define UPLOAD_TAIL_MAX_BYTES MAX_SD_BUFFER_SIZE
+#endif // ndef UPLOAD_TAIL_MAX_BYTES
+// The segments of an upload sit in the heap until the receive callback has consumed them, and more of them
+// queue up while the player uses the time between them: inside the callback the free heap runs up to about
+// 5 KB below what it was when the upload started. With less than this free at the start, the show stops for
+// the upload as it always did, so that the heap stays above the floors the rest of the firmware counts on.
+#ifndef UPLOAD_KEEP_PLAYING_MIN_HEAP
+#   define UPLOAD_KEEP_PLAYING_MIN_HEAP (9 * 1024)
+#endif // ndef UPLOAD_KEEP_PLAYING_MIN_HEAP
+static const uint32_t UploadKeepPlayingMinBytes = UPLOAD_KEEP_PLAYING_MIN_BYTES;
+static const uint32_t UploadKeepPlayingMinHeap  = UPLOAD_KEEP_PLAYING_MIN_HEAP;
 
 #ifdef SUPPORT_FTP
 #include <SimpleFTPServer.h>
@@ -1710,14 +1728,13 @@ void c_FileMgr::CloseSdFile (FileId& FileHandle)
         FileList[FileListIndex].IsOpen = false;
         FileList[FileListIndex].handle = INVALID_FILE_HANDLE;
 
-        if (nullptr != FileList[FileListIndex].buffer.DataBuffer)
+        if (FileList[FileListIndex].IsOutputBufferTail)
         {
-            if(FileList[FileListIndex].buffer.DataBuffer != OutputMgr.ISR_GetBufferAddress())
-            {
-                // only free the buffer if it is not malloc'd
-                free(FileList[FileListIndex].buffer.DataBuffer);
-            }
+            // give the end of the output buffer back
+            OutputMgr.ReleaseBufferTail ();
+            FileList[FileListIndex].IsOutputBufferTail = false;
         }
+        // the buffer is borrowed from the output buffer (all of it or its end), never owned
         FileList[FileListIndex].buffer.DataBuffer = nullptr;
         FileList[FileListIndex].buffer.size = 0;
         FileList[FileListIndex].buffer.offset = 0;
@@ -1883,6 +1900,14 @@ bool c_FileMgr::FlushSdFileBuf (const FileId& FileHandle)
         {
             // nothing is buffered for this file
             response = true;
+            break;
+        }
+
+        if (FileList[FileListIndex].IsOutputBufferTail &&
+            (OutputMgr.GetBufferTailSize () < FileList[FileListIndex].buffer.size))
+        {
+            // the output configuration changed under the upload and the outputs now use this part of the buffer
+            logcon (F ("FlushSdFileBuf:ERROR:The output configuration changed during the upload"));
             break;
         }
 
@@ -2413,10 +2438,7 @@ bool c_FileMgr::handleFileUpload (
 
         FeedWDT();
         expectedIndex = 0;
-
-        OutputMgr.ClearBuffer();
-        OutputMgr.PauseOutputs(false);
-        InputMgr.SetOperationalState(false);
+        ResumeOutputsAfterUpload ();
 
         fsUploadFileName.clear();
         fsUploadTempName.clear();
@@ -2425,6 +2447,47 @@ bool c_FileMgr::handleFileUpload (
     // DEBUG_END;
     return response;
 } // handleFileUpload
+
+//-----------------------------------------------------------------------------
+// The upload that took the whole output buffer is over, complete or not: the buffer goes back to the outputs and
+// the inputs run again. Nothing to do after an upload that ran in the tail of the buffer.
+void c_FileMgr::ResumeOutputsAfterUpload ()
+{
+    // DEBUG_START;
+
+    if (fsUploadPausedOutputs)
+    {
+        fsUploadPausedOutputs = false;
+        OutputMgr.ClearBuffer ();
+        InputMgr.SetOperationalState (true);
+        OutputMgr.PauseOutputs (false);
+    }
+
+    // DEBUG_END;
+} // ResumeOutputsAfterUpload
+
+//-----------------------------------------------------------------------------
+// The upload buffer an upload starting now would get while the show keeps running: whole sectors at the end of
+// the output buffer behind the configured channels, within the buffer limit. 0 when there are too few of them,
+// or too little free heap for the receive bursts on top of a running player: the show then stops for the upload.
+uint32_t c_FileMgr::UploadBufferTailSize ()
+{
+    uint32_t TailSize = min (uint32_t (OutputMgr.GetBufferTailSize () & ~(SD_BLOCK_SIZE - 1)), uint32_t (UPLOAD_TAIL_MAX_BYTES));
+    if ((TailSize < UploadKeepPlayingMinBytes) || (ESP.getFreeHeap () < UploadKeepPlayingMinHeap))
+    {
+        TailSize = 0;
+    }
+    return TailSize;
+} // UploadBufferTailSize
+
+//-----------------------------------------------------------------------------
+// Asked by FPPDiscovery before it hands over the first chunk of a file, so that it can stop the player first when
+// the whole buffer is needed; the decision holds for the file that follows.
+bool c_FileMgr::SdFileUploadStopsOutputs ()
+{
+    fsUploadTailSizeDecision = UploadBufferTailSize ();
+    return (0 == fsUploadTailSizeDecision);
+} // SdFileUploadStopsOutputs
 
 //-----------------------------------------------------------------------------
 void c_FileMgr::handleFileUploadNewFile (const String & filename, uint32_t totalLen)
@@ -2444,8 +2507,13 @@ void c_FileMgr::handleFileUploadNewFile (const String & filename, uint32_t total
     fsUploadLastProgressMS = fsUploadStartTime;
     fsUploadFileName       = filename;
     fsUploadTempName       = filename + UploadTempSuffix;
+    fsUploadPausedOutputs  = false;
+    uint32_t FreeHeap      = ESP.getFreeHeap ();
+    uint32_t TailSize      = (UINT32_MAX != fsUploadTailSizeDecision) ? fsUploadTailSizeDecision : UploadBufferTailSize ();
+    fsUploadTailSizeDecision = UINT32_MAX;
 
-    logcon (String (F ("Upload File: '")) + fsUploadFileName + F ("' Started (") + String (totalLen) + F (" bytes)"));
+    logcon (String (F ("Upload File: '")) + fsUploadFileName + F ("' Started (") + String (totalLen) + F (" bytes, heap ") + String (FreeHeap) +
+            (TailSize ? String (F (", ")) + String (TailSize) + F (" byte buffer, outputs running)") : String (F (", outputs paused)"))));
 
     DeleteSdFile (fsUploadTempName);
 
@@ -2473,15 +2541,29 @@ void c_FileMgr::handleFileUploadNewFile (const String & filename, uint32_t total
             }
         }
 #endif // ndef SIMULATE_SD
-        // DEBUG_V("Use the output buffer as a data buffer");
         FileList[FileListIndex].buffer.offset = 0;
         FileList[FileListIndex].buffer.BytesSinceSync = 0;
-        // the output buffer holds a whole SD write buffer; OutputMgr.cpp checks that at compile time
-        FileList[FileListIndex].buffer.size = MAX_SD_BUFFER_SIZE;
-        FileList[FileListIndex].buffer.DataBuffer = OutputMgr.ISR_GetBufferAddress();
-        OutputMgr.PauseOutputs(true);
-        InputMgr.SetOperationalState(false);
-        OutputMgr.ClearBuffer();
+        FileList[FileListIndex].IsOutputBufferTail = false;
+        if (TailSize)
+        {
+            // The end of the output buffer that no configured output uses holds the data on its way to the
+            // card, and the outputs and inputs keep running.
+            FileList[FileListIndex].buffer.DataBuffer = OutputMgr.ReserveBufferTail (TailSize);
+            FileList[FileListIndex].buffer.size = TailSize;
+            FileList[FileListIndex].IsOutputBufferTail = (nullptr != FileList[FileListIndex].buffer.DataBuffer);
+        }
+        if (!FileList[FileListIndex].IsOutputBufferTail)
+        {
+            // Not enough room behind the configured channels: the whole output buffer holds the data (it holds a
+            // whole SD write buffer, OutputMgr.cpp checks that at compile time) and the outputs pause until the
+            // upload is done.
+            FileList[FileListIndex].buffer.size = MAX_SD_BUFFER_SIZE;
+            FileList[FileListIndex].buffer.DataBuffer = OutputMgr.ISR_GetBufferAddress();
+            fsUploadPausedOutputs = true;
+            OutputMgr.PauseOutputs(true);
+            InputMgr.SetOperationalState(false);
+            OutputMgr.ClearBuffer();
+        }
         // DEBUG_V(String("Buffer Size: ") + String(FileList[FileListIndex].buffer.size));
     }
 
@@ -2603,6 +2685,7 @@ void c_FileMgr::AbortSdFileUpload()
     fsUploadFileName.clear();
     fsUploadTempName.clear();
     expectedIndex = 0;
+    ResumeOutputsAfterUpload ();
 
     // DEBUG_END;
 } // AbortSdFileUpload
