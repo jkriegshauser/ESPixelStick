@@ -146,6 +146,13 @@ void c_WebMgr::init ()
         #endif // def ARDUINO_ARCH_ESP8266
         // DEBUG_START;
         // Add header for SVG plot support?
+        #ifdef ARDUINO_ARCH_ESP32
+        {
+            // test build: refuse requests and pace transfers while the internal heap is short
+            AsyncWebServer::setMinFreeHeapForRequests(24 * 1024);
+            AsyncWebServer::setMinFreeHeapForTransfers(32 * 1024);
+        }
+        #endif // def ARDUINO_ARCH_ESP32
     	DefaultHeaders::Instance ().addHeader (F ("Access-Control-Allow-Origin"),  "*");
     	DefaultHeaders::Instance ().addHeader (F ("Access-Control-Allow-Headers"), "append, delete, entries, foreach, get, has, keys, set, values, Authorization, Content-Type, Content-Range, Content-Disposition, Content-Description, cache-control, x-requested-with");
     	DefaultHeaders::Instance ().addHeader (F ("Access-Control-Allow-Methods"), "GET, HEAD, POST, PUT, DELETE, CONNECT, OPTIONS, TRACE, PATCH");
