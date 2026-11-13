@@ -169,6 +169,9 @@ void c_WebMgr::init ()
         {
             AsyncServer * async = new AsyncServer(HTTP_PORT);
             async->SetMaxNumOpenTcpSessions(2);
+            // refuse a new connection while the heap is short: accepting one costs the client and the
+            // request objects, and a failed allocation there is fatal on the ESP8266
+            async->SetMinFreeHeapForNewSessions(WEB_REQUEST_MIN_FREE_HEAP);
             delete async;
         }
         #endif // def ARDUINO_ARCH_ESP8266
