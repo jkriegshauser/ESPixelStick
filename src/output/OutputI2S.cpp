@@ -22,7 +22,6 @@
 #include "output/OutputI2S.hpp"
 #include "driver/gpio.h"
 #include "esp_rom_gpio.h"
-#include <numeric>
 #include "esp_attr.h"
 
 //----------------------------------------------------------------------------
@@ -56,7 +55,7 @@ void IRAM_ATTR c_OutputI2S::ISR_Handler (void * _TransmitDmaBuffer)
 
     // reset the buffer management fields
     TransmitDmaBuffer->header.length = TransmitDmaBuffer->header.size;
-    TransmitDmaBuffer->header.offset = 0; // Always start to the begining of the buffer
+    TransmitDmaBuffer->header.offset = 0; // Always start at the begining of the buffer
     
     if (pCurrentPort->IsActive)
     {

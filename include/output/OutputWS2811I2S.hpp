@@ -42,7 +42,7 @@ public:
     void    GetStatus (ArduinoJson::JsonObject& jsonStatus);
     void    SetOutputBufferSize (uint32_t NumChannelsAvailable);
     void    PauseOutput (bool State);
-    bool    ISR_GetNextDataSlicesToSend (c_OutputI2S::I2S_Item_t * DataToSend, uint32_t numSlices, c_OutputI2S::I2S_Item_t DefaultIntensitySliceData);
+    bool    ISR_GetNextDataSlicesToSend (c_OutputI2S::I2S_Item_t * DataToSend, uint32_t & numSlices, c_OutputI2S::I2S_Item_t DefaultIntensitySliceData);
     void    ISR_StartNewDataFrame ();
 
     // to be removed when the I2S driver is fully implemented
@@ -58,17 +58,8 @@ private:
     uint32_t        DataBitMask;
     uint32_t        DataBit;
 
-    uint32_t        ZeroHighBitSliceCount;
-    uint32_t        ZeroLowBitSliceCount;
-
-    uint32_t        OneHighBitSliceCount;
-    uint32_t        OneLowBitSliceCount;
-
-    uint32_t        HighBitCurrentSliceCount;
-    uint32_t        LowBitCurrentSliceCount;
-
-    uint32_t        FrameResetSliceCount;
-    uint32_t        FrameResetCurrentSliceCount;
+    uint32_t        FrameResetWordCount;
+    uint32_t        FrameResetRemainingWordCount;
 
     uint32_t        IdleSliceCount;
     uint32_t        IdleCurrentSliceCount;
@@ -81,19 +72,23 @@ private:
     #define INC_WS2811_I2S_DEBUG_COUNTER(c) (I2SDebugCounters.c++)
     struct
     {
-        uint32_t GetDataSlices;
+        uint32_t GetDataSlicesI;
+        uint32_t GetDataSlicesII;
+        uint32_t GetDataSlicesIII;
         uint32_t FrameStarts;
         uint32_t FrameEnds;
-        uint32_t IdleBitSlices;
-        uint32_t FrameResetBitSlices;
-        uint32_t DataBitSlices;
-        uint32_t DataBytes;
-        uint32_t BitSliceHigh;
-        uint32_t BitSliceLow;
-        uint32_t NextDataBit;
-        uint32_t DataBits;
-        uint32_t DataBitEnd;
-        uint32_t DataByteEnd;
+        uint32_t FrameReset;
+        uint32_t FrameResetI;
+        uint32_t FrameResetII;
+        uint32_t FrameResetIII;
+        uint32_t FrameResetAlignments;
+        uint32_t FrameResetWords;
+        uint32_t FrameResetDone;
+        uint32_t IdleSliceCount;
+        uint32_t DataI;
+        uint32_t DataII;
+        uint32_t DataIII;
+        uint32_t DataByteCount;
         uint32_t UnKnownFrameState;
     } I2SDebugCounters;
     #else
@@ -103,12 +98,21 @@ private:
     enum OutputWS2811I2S_FSM_States
     {
         _OutputWS2811I2S_FSM_State_FrameReset,
-        _OutputWS2811I2S_FSM_State_DataHigh,
-        _OutputWS2811I2S_FSM_State_DataLow,
+        _OutputWS2811I2S_FSM_State_Data,
         _OutputWS2811I2S_FSM_State_Idle
     };
     OutputWS2811I2S_FSM_States volatile OutputWS2811I2S_FSM_State = OutputWS2811I2S_FSM_States::_OutputWS2811I2S_FSM_State_Idle;
     
+    union DataAsUint32_t
+    {
+        c_OutputI2S::I2S_Item_t DataAsBytes[4];
+        uint32_t AsUint32;
+    };
+
+    DataAsUint32_t ResetBit;
+    DataAsUint32_t OneBit;
+    DataAsUint32_t ZeroBit;
+
 }; // c_OutputWS2811I2S
 
 #endif // defined(SUPPORT_OutputProtocol_WS2811) && defined(SUPPORT_I2S)
