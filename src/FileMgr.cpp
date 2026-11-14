@@ -932,7 +932,7 @@ bool c_FileMgr::SaveFlashFile(const String &FileName, JsonDocument &FileData)
     // Writing it would replace a good configuration file with a broken one, so keep the old file.
     if (FileData.overflowed() || FileData.isNull())
     {
-        logcon(String(CN_stars) + CfgFileMessagePrefix + String(F("not saved: the configuration document is incomplete (out of memory).")) + CN_stars);
+        logcon(String(CN_stars) + CfgFileMessagePrefix + String(F("not saved: the document is incomplete due to an out of memory error.")) + CN_stars);
         return Response;
     }
 
@@ -1258,7 +1258,7 @@ void c_FileMgr::DescribeSdCardToUser ()
 {
     // DEBUG_START;
 
-    logcon (String (F ("SD Card Size: ")) + int64String (SdCardSize) + "Bytes");
+    logcon (String (F ("SD Card Size: ")) + int64String (SdCardSize) + " Bytes");
 /*
     // DEBUG_V("Open Root");
     FsFile root;
@@ -2041,7 +2041,7 @@ void c_FileMgr::BuildFseqList(bool DisplayFileNames)
         fs::File ListFile = LittleFS.open(TempFileName.c_str(), CN_w);
         if(!ListFile)
         {
-            logcon(F("ERROR: Could not open the FSEQ list file for writing."));
+            logcon(F("ERROR: Could not open the temporary FSEQ list file for writing."));
             break;
         }
 
@@ -2053,13 +2053,13 @@ void c_FileMgr::BuildFseqList(bool DisplayFileNames)
         uint32_t numFiles = 0;
 
         LockSd();
-#ifdef SIMULATE_SD
+    #ifdef SIMULATE_SD
         File InputDir = ESP_SD.open (CN_slashsd, CN_r);
-#else
+    #else
         ESP_SD.chdir();
         FsFile InputDir = ESP_SD.open ("/", O_READ);
         ESP_SD.chdir();
-#endif // ndef SIMULATE_SD
+    #endif // ndef SIMULATE_SD
         if(!InputDir)
         {
             UnLockSd();
@@ -2069,28 +2069,36 @@ void c_FileMgr::BuildFseqList(bool DisplayFileNames)
             break;
         }
 
-#ifdef SIMULATE_SD
+        // DEBUG_V(String("InputDir Name: ") + String(InputDir.name()));
+
+    #ifdef SIMULATE_SD
         String CurrentEntryName = InputDir.getNextFileName();
         while (!CurrentEntryName.isEmpty())
         {
+            // DEBUG_V("Process a file entry");
+            // DEBUG_V(String("CurrentEntryName: ") + CurrentEntryName);
+
             FeedWDT();
 
             File CurrentEntry = ESP_SD.open(CurrentEntryName, CN_r);
-            if(!CurrentEntry.isDirectory())
+            if(CurrentEntry.isDirectory())
             {
-                String EntryName = String (CurrentEntry.name());
-                if (AddFseqListEntry(ListFile, EntryName, CurrentEntry.size (), 0, 0, numFiles, DisplayFileNames))
-                {
-                    usedBytes += CurrentEntry.size ();
-                }
+                // DEBUG_V("Skip embedded directory and hidden files");
+                CurrentEntry.close();
+                continue;
             }
+/*
+            AddFseqListEntry(ListFile, CurrentEntry, numFiles, usedBytes, DisplayFileNames);
+*/
             CurrentEntry.close();
             CurrentEntryName = InputDir.getNextFileName ();
+
         } // end while
-#else
+    #else
         FsFile CurrentEntry;
         while (CurrentEntry.openNext (&InputDir, O_READ))
         {
+            // DEBUG_V("Process a file entry");
             FeedWDT();
 
             if(CurrentEntry.isDirectory() || CurrentEntry.isHidden())
@@ -2114,20 +2122,16 @@ void c_FileMgr::BuildFseqList(bool DisplayFileNames)
                 }
                 continue;
             }
-            uint16_t Date = 0;
-            uint16_t Time = 0;
-            CurrentEntry.getCreateDateTime (&Date, &Time);
-            if (AddFseqListEntry(ListFile, EntryName, CurrentEntry.size (), Date, Time, numFiles, DisplayFileNames))
-            {
-                usedBytes += CurrentEntry.size ();
-            }
+            AddFseqListEntry(ListFile, CurrentEntry, numFiles, usedBytes, DisplayFileNames);
             CurrentEntry.close();
-        } // end while
-#endif // ndef SIMULATE_SD
+        } // end while true
+
+    #endif // ndef SIMULATE_SD
 
         InputDir.close();
         UnLockSd();
 
+        // close the array and add the descriptive data
         ListFile.print(F("],\"usedBytes\":"));
         ListFile.print(int64String(usedBytes));
         ListFile.print(F(",\"numFiles\":"));
@@ -2141,47 +2145,72 @@ void c_FileMgr::BuildFseqList(bool DisplayFileNames)
         logcon (String(F("FSEQ file list: ")) + String(numFiles) + F(" files in ") + String(millis() - StartTime) + F(" ms"));
     } while(false);
 
+    // String Temp;
+    // ReadFlashFile(FSEQFILELIST, Temp);
+    // DEBUG_V(Temp);
+
     // DEBUG_END;
 
 } // BuildFseqList
 
 //-----------------------------------------------------------------------------
 // Append one file entry to the streamed FSEQ list. Returns true when an entry was written.
-bool c_FileMgr::AddFseqListEntry(fs::File & ListFile, const String & EntryName, uint64_t EntrySize, uint16_t Date, uint16_t Time, uint32_t & numFiles, bool DisplayFileNames)
+void c_FileMgr::AddFseqListEntry(fs::File & ListFile, FsFile & CurrentEntry, uint32_t & numFiles, uint64_t & usedBytes, bool DisplayFileNames)
 {
-    if (EntryName.isEmpty () || (0 == EntrySize))
-    {
-        return false;
-    }
+	// DEBUG_START;
 
-    FoundZipFile |= IsCompressed(EntryName);
+    char entryName [256];
 
-    if(DisplayFileNames)
-    {
-        logcon (String(F("SD File: '")) + EntryName + "'   " + int64String(EntrySize));
-    }
+	do // once
+	{
+        memset(entryName, 0x0, sizeof(entryName));
+        CurrentEntry.getName (entryName, sizeof(entryName)-1);
+        String EntryName = String (entryName);
+        // DEBUG_V (         "EntryName: " + EntryName);
+        // DEBUG_V ("EntryName.length(): " + String(EntryName.length ()));
+        // DEBUG_V ("      entry.size(): " + int64String(CurrentEntry.size ()));
 
-    tmElements_t tm;
-    tm.Year   = FS_YEAR(Date) - 1970;
-    tm.Month  = FS_MONTH(Date);
-    tm.Day    = FS_DAY(Date);
-    tm.Hour   = FS_HOUR(Time);
-    tm.Minute = FS_MINUTE(Time);
-    tm.Second = FS_SECOND(Time);
+	    if (EntryName.isEmpty () || (0 == CurrentEntry.size()))
+	    {
+	        break;
+	    }
 
-    JsonDocument EntryDoc;
-    JsonObject Entry = EntryDoc.to<JsonObject>();
-    Entry["name"]   = EntryName;
-    Entry["date"]   = makeTime(tm);
-    Entry["length"] = EntrySize;
+	    FoundZipFile |= IsCompressed(EntryName);
+        usedBytes += CurrentEntry.size ();
 
-    if (numFiles)
-    {
-        ListFile.print(',');
-    }
-    serializeJson(EntryDoc, ListFile);
-    ++numFiles;
-    return true;
+	    if(DisplayFileNames)
+	    {
+	        logcon (String(F("SD File: '")) + EntryName + "'   " + int64String(CurrentEntry.size()));
+	    }
+
+        uint16_t Date;
+        uint16_t Time;
+        CurrentEntry.getCreateDateTime (&Date, &Time);
+
+        tmElements_t tm;
+	    tm.Year   = FS_YEAR(Date) - 1970;
+	    tm.Month  = FS_MONTH(Date);
+	    tm.Day    = FS_DAY(Date);
+	    tm.Hour   = FS_HOUR(Time);
+	    tm.Minute = FS_MINUTE(Time);
+	    tm.Second = FS_SECOND(Time);
+
+	    JsonDocument EntryDoc;
+	    JsonObject Entry = EntryDoc.to<JsonObject>();
+	    Entry["name"]   = EntryName;
+	    Entry["date"]   = makeTime(tm);
+	    Entry["length"] = CurrentEntry.size ();
+	
+	    if (numFiles)
+	    {
+	        ListFile.print(',');
+	    }
+	    serializeJson(EntryDoc, ListFile);
+	    ++numFiles;
+
+    } while(false);
+	
+	// DEBUG_END;
 } // AddFseqListEntry
 
 //-----------------------------------------------------------------------------
