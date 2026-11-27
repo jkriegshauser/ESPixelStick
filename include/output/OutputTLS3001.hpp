@@ -92,6 +92,7 @@ protected:
 #define TLS3001_PIXEL_DATA_RATE             1000000.0 // bits /sec
 #define TLS3001_PIXEL_NS_BIT                ((1.0 / TLS3001_PIXEL_DATA_RATE) * NanoSecondsInASecond)
 #define TLS3001_MIN_IDLE_TIME_US             50
+#define TLS3001_NumLeadingOnes                15
 
 private:
 #define TLS3001_DEFAULT_FRAMES_BETWEEN_RESETS  40

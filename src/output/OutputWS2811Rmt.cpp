@@ -132,16 +132,18 @@ void c_OutputWS2811Rmt::GetStatus (ArduinoJson::JsonObject& jsonStatus)
 #endif // def USE_RMT_DEBUG_COUNTERS
     #ifdef WS2811_RMT_DEBUG_COUNTERS
     JsonObject JsonCounters = jsonStatus["JsonCounters"].to<JsonObject>();
-    JsonWrite(JsonCounters, "GetNextBit",  RmtDebugCounters.GetNextBit);
-    JsonWrite(JsonCounters, "FrameStarts", RmtDebugCounters.FrameStarts);
-    JsonWrite(JsonCounters, "FrameEnds",   RmtDebugCounters.FrameEnds);
-    JsonWrite(JsonCounters, "StartBits",   RmtDebugCounters.StartBits);
-    JsonWrite(JsonCounters, "IfgBits",     RmtDebugCounters.IfgBits);
-    JsonWrite(JsonCounters, "DataBits",    RmtDebugCounters.DataBits);
-    JsonWrite(JsonCounters, "StopBits",    RmtDebugCounters.StopBits);
-    JsonWrite(JsonCounters, "Underrun",    RmtDebugCounters.Underrun);
-    JsonWrite(JsonCounters, "Can Refresh", CanRefresh);
-    JsonWrite(JsonCounters, "Cannot Refresh", Cannot);
+    JsonWrite(JsonCounters, "GetNextBit",    RmtDebugCounters.GetNextBit);
+    JsonWrite(JsonCounters, "FrameStarts",   RmtDebugCounters.FrameStarts);
+    JsonWrite(JsonCounters, "FrameEnds",     RmtDebugCounters.FrameEnds);
+    JsonWrite(JsonCounters, "StartBits",     RmtDebugCounters.StartBits);
+    JsonWrite(JsonCounters, "IfgBits",       RmtDebugCounters.IfgBits);
+    JsonWrite(JsonCounters, "DataBits",      RmtDebugCounters.DataBits);
+    JsonWrite(JsonCounters, "StopBits",      RmtDebugCounters.StopBits);
+    JsonWrite(JsonCounters, "Underrun",      RmtDebugCounters.Underrun);
+    JsonWrite(JsonCounters, "RmtPoll",       RmtDebugCounters.RmtPoll);
+    JsonWrite(JsonCounters, "RmtPollI",      RmtDebugCounters.RmtPollI);
+    JsonWrite(JsonCounters, "CanRefresh",    RmtDebugCounters.CanRefresh);
+    JsonWrite(JsonCounters, "CannotRefresh", RmtDebugCounters.CannotRefresh);
     #endif // def WS2811_RMT_DEBUG_COUNTERS
 
     // // DEBUG_END;
@@ -162,10 +164,13 @@ bool c_OutputWS2811Rmt::RmtPoll ()
 {
     // DEBUG_START;
     bool Response = false;
+    INC_WS2811_RMT_DEBUG_COUNTERS(RmtPoll);
+
     do // Once
     {
         if (gpio_num_t(-1) == OutputPortDefinition.gpios.data)
         {
+            INC_WS2811_RMT_DEBUG_COUNTERS(RmtPollI);
             break;
         }
 

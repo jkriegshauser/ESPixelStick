@@ -22,6 +22,7 @@
 */
 
 #include "ESPixelStick.h"
+#include "network/NetworkMgr.hpp"
 
 //-----------------------------------------------------------------------------
 // bring in driver definitions
@@ -781,6 +782,11 @@ void c_InputMgr::Process ()
             OutputMgr.ClearBuffer ();
             RestartBlankTimer (InputSecondaryChannelId);
         } // ALL blank timers have expired
+
+        // Tell the WiFi driver whether show data is arriving on the primary input. It
+        // holds off roaming to another AP while it is, the same signal that pauses the
+        // secondary input.
+        NetworkMgr.SetPrimaryInputIsActive (!BlankTimerHasExpired (InputPrimaryChannelId));
 
         if (RebootNeeded)
         {

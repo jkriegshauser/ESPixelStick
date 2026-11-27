@@ -46,6 +46,9 @@ jobs:
           # QuinLed QUAD Dig OCTA
           - target: "esp32_quinled_dig_octa"
             chip: "esp32"
+          # QuinLed Dig OCTA Brainboard v4
+          - target: "esp32_quinled_dig_octa_v4"
+            chip: "esp32"
           # QuinLed QUAD
           - target: "esp32_quinled_quad"
             chip: "esp32"

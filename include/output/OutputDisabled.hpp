@@ -38,9 +38,9 @@ public:
     void         GetConfig (ArduinoJson::JsonObject & jsonConfig); ///< Get the current config used by the driver
     void         GetStatus (ArduinoJson::JsonObject & jsonConfig);
     uint32_t     Poll ();                                          ///< Call from loop(),  renders output data
-#ifdef ARDUINO_ARCH_ESP32
-    bool         RmtPoll () {return false;}
-#endif // def ARDUINO_ARCH_ESP32
+    #if defined(SUPPORT_RMT)
+    bool     RmtPoll () {return false;}
+    #endif // defined(SUPPORT_RMT)
     void         GetDriverName (String & sDriverName) { sDriverName = CN_Disabled; }
     uint32_t     GetNumOutputBufferBytesNeeded () { return 0; }
     uint32_t     GetNumOutputBufferChannelsServiced () { return 0; }

@@ -1,0 +1,14 @@
+{
+    "version": "1.0.0",
+    "apiVersion": "1.0.0",
+    "author": "Martin Mueller",
+    "description": "Decodes GE Color Effects (GECE) 26-bit LED protocol frames on top of Simple Parallel.",
+    "name": "GE Color Effects (GECE) Analyzer",
+    "extensions": {
+      "GECE Decoder": {
+        "type": "HighLevelAnalyzer",
+        "entryPoint": "HighLevelAnalyzer.GeceHla"
+      }
+    }
+  }
+  

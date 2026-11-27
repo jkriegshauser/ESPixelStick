@@ -54,6 +54,8 @@
 #   include "platforms/GPIO_Defs_ESP32_MH_ET_LIVE_MiniKit.hpp"
 #elif defined (BOARD_ESP32_QUINLED_DIG_OCTA)
 #   include "platforms/GPIO_Defs_ESP32_QUINLED_Dig-Octa.hpp"
+#elif defined (BOARD_ESP32_QUINLED_DIG_OCTA_V4)
+#   include "platforms/GPIO_Defs_ESP32_QUINLED_Dig-Octa_v4.hpp"
 #elif defined (BOARD_ESP32_OLIMEX_GATEWAY)
 #   include "platforms/GPIO_Defs_ESP32_Olimex_Gateway.hpp"
 #elif defined (BOARD_ESP32_QUINLED_QUAD_ETH)

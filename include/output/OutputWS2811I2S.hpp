@@ -44,30 +44,27 @@ public:
     void    PauseOutput (bool State);
     bool    ISR_GetNextDataSlicesToSend (c_OutputI2S::I2S_Item_t * DataToSend, uint32_t & numSlices, c_OutputI2S::I2S_Item_t DefaultIntensitySliceData);
     void    ISR_StartNewDataFrame ();
-
-    // to be removed when the I2S driver is fully implemented
-    virtual bool RmtPoll() {return false;}
+    void    SetDefaultDataValue (c_OutputI2S::I2S_Item_t DefaultIntensitySliceData);
 
 private:
     void    CalculateFrameBitSlices ();
     bool    ISR_SetUpNextDataToSend ();
 
-    // The adjustments compensate for rounding errors in the calculations
     c_OutputI2S     *I2Sdriver;
 
-    uint32_t        DataBitMask;
-    uint32_t        DataBit;
-
-    uint32_t        FrameResetWordCount;
-    uint32_t        FrameResetRemainingWordCount;
-
-    uint32_t        IdleSliceCount;
-    uint32_t        IdleCurrentSliceCount;
+    uint32_t        FrameResetSliceCount;
+    uint32_t        FrameResetRemainingSliceCount;
 
     uint32_t        DataPattern;
     uint32_t        DataPatternMask;
 
-    #define WS2811_I2S_DEBUG_COUNTERS
+    c_OutputI2S::I2SDataAsUint_t OneBit;
+    c_OutputI2S::I2SDataAsUint_t ZeroBit;
+
+    c_OutputI2S::I2S_Item_t DataBitMask;
+    c_OutputI2S::I2S_Item_t DataBit;
+
+    // #define WS2811_I2S_DEBUG_COUNTERS
     #ifdef WS2811_I2S_DEBUG_COUNTERS
     #define INC_WS2811_I2S_DEBUG_COUNTER(c) (I2SDebugCounters.c++)
     struct
@@ -82,12 +79,12 @@ private:
         uint32_t FrameResetII;
         uint32_t FrameResetIII;
         uint32_t FrameResetAlignments;
-        uint32_t FrameResetWords;
         uint32_t FrameResetDone;
         uint32_t IdleSliceCount;
         uint32_t DataI;
         uint32_t DataII;
         uint32_t DataIII;
+        uint32_t DataIV;
         uint32_t DataByteCount;
         uint32_t UnKnownFrameState;
     } I2SDebugCounters;
@@ -102,16 +99,6 @@ private:
         _OutputWS2811I2S_FSM_State_Idle
     };
     OutputWS2811I2S_FSM_States volatile OutputWS2811I2S_FSM_State = OutputWS2811I2S_FSM_States::_OutputWS2811I2S_FSM_State_Idle;
-    
-    union DataAsUint32_t
-    {
-        c_OutputI2S::I2S_Item_t DataAsBytes[4];
-        uint32_t AsUint32;
-    };
-
-    DataAsUint32_t ResetBit;
-    DataAsUint32_t OneBit;
-    DataAsUint32_t ZeroBit;
 
 }; // c_OutputWS2811I2S
 

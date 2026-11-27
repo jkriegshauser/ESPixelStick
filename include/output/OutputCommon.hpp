@@ -42,9 +42,9 @@ public:
     virtual bool         SetConfig (ArduinoJson::JsonObject & jsonConfig);     ///< Set a new config in the driver
     virtual void         GetConfig (ArduinoJson::JsonObject & jsonConfig);     ///< Get the current config used by the driver
     virtual uint32_t     Poll () = 0;                                        ///< Call from loop(),  renders output data
-#ifdef ARDUINO_ARCH_ESP32
-    virtual bool         RmtPoll () = 0;                                        ///< Call from loop(),  renders output data
-#endif // def ARDUINO_ARCH_ESP32
+    #if defined(SUPPORT_RMT)
+    virtual bool         RmtPoll () {return false;}
+    #endif // defined(SUPPORT_RMT)
     virtual void         GetDriverName (String & sDriverName) = 0;             ///< get the name for the instantiated driver
     inline  OM_PortId_t  GetOutputPortId ()    { return OutputPortDefinition.PortId; }     ///< return the output channel number
     inline  uint8_t    * ISR_GetBufferAddress(){ return pOutputBuffer;}        ///< Get the address of the buffer into which the E1.31 handler will stuff data
@@ -78,7 +78,7 @@ protected:
     bool        Paused = false;
 
     void ISR_ReportNewFrame ();
-#ifndef SUPPORT_I2S
+
     inline bool canRefresh ()
     {
         uint32_t Now = micros ();
@@ -95,5 +95,5 @@ protected:
 
     private:   uint32_t FrameStartTimeInMicroSec = 0;
     public:    uint32_t GetFrameStartTimeInMicroSec() {return FrameStartTimeInMicroSec;}
-#endif // ndef SUPPORT_I2S
+
 }; // c_OutputCommon

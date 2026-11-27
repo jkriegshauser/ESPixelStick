@@ -1854,6 +1854,10 @@ function ExtractNetworkWiFiConfigFromHtmlPage() {
     wifi.ap_reboot = $('#network #wifi #ap_reboot').prop('checked');
     wifi.ap_timeout = parseInt($('#network #wifi #ap_timeout').val(), 10);
     wifi.StayInApMode = $('#network #wifi #StayInApMode').prop('checked');
+    wifi.roam = $('#network #wifi #roam').prop('checked');
+    wifi.roam_rssi = parseInt($('#network #wifi #roam_rssi').val(), 10);
+    wifi.roam_time = parseInt($('#network #wifi #roam_time').val(), 10);
+    wifi.roam_delta = parseInt($('#network #wifi #roam_delta').val(), 10);
 
     let CurrentRowId = 0;
     wifi.ApCredentials.forEach(ApCredential =>

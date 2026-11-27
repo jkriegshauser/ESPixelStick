@@ -77,6 +77,8 @@ private:
         uint32_t DataBytes = 0;
         uint32_t StopBits = 0;
         uint32_t Underrun = 0;
+        uint32_t RmtPoll = 0;
+        uint32_t RmtPollI = 0;
         uint32_t CanRefresh = 0;
         uint32_t CannotRefresh = 0;
     } RmtDebugCounters;

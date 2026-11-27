@@ -1,0 +1,12 @@
+{
+    "name": "GECE Decoder",
+    "apiVersion": "1.0.0",
+    "author": "Martin Mueller",
+    "version": "1.0.0",
+    "description": "GE Color Effects Protocol Decoder",
+    "extensions": {
+        "HighLevelAnalyzer": {
+            "entryPoint": "HighLevelAnalyzer.py"
+        }
+    }
+}

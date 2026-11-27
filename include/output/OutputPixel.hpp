@@ -36,6 +36,12 @@ protected:
 
     void SetFrameDurration (float IntensityBitTimeInUs, uint16_t BlockSize = 1, float BlockDelayUs = 0.0, uint OutBitsPerDataBit = 8);
 
+    #ifdef SUPPORT_OutputProtocol_GECE
+    uint32_t ISR_PixelSendGECEIntensity();
+    void ClearGecePixelId() {GECEPixelId = 0;}
+    uint32_t GetGecePixelId() {return GECEPixelId;}
+    #endif // def SUPPORT_OutputProtocol_GECE
+
 private:
 #define PIXEL_DEFAULT_INTENSITY_BYTES_PER_PIXEL 3
 
@@ -108,9 +114,6 @@ private:
     uint32_t ISR_FramePrependData();
     uint32_t ISR_PixelPrependNulls();
     uint32_t ISR_PixelSendPrependIntensity();
-#ifdef SUPPORT_OutputProtocol_GECE
-    uint32_t ISR_PixelSendGECEIntensity();
-#endif // def SUPPORT_OutputProtocol_GECE
     uint32_t ISR_PixelSendIntensity();
     uint32_t ISR_PixelAppendNulls();
     uint32_t ISR_FrameAppendData();

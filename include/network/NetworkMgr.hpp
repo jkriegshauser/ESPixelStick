@@ -48,6 +48,7 @@ public:
     void GetHostname (String & name) { name = hostname; }
     IPAddress GetlocalIP ();
     String GetWiFiMacAddress() {return WiFiDriver.GetWiFiMacAddress();}
+    void SetPrimaryInputIsActive (bool value) { WiFiDriver.SetPrimaryInputIsActive (value); }
 
 private:
     bool Validate ();
