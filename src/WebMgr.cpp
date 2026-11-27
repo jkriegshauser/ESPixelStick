@@ -132,19 +132,48 @@ void c_WebMgr::NetworkStateChanged (bool NewNetworkState)
 } // NetworkStateChanged
 
 //-----------------------------------------------------------------------------
-#ifdef ARDUINO_ARCH_ESP8266
-// Refuse new web connections, and requests on connections that are already open, while less than
-// this much heap is free. Accepting one costs the client and the request objects, serving a request
-// costs the response and its buffers, and a failed allocation there is fatal on the ESP8266.
-#ifndef WEB_SESSION_MIN_FREE_HEAP
-#   define WEB_SESSION_MIN_FREE_HEAP (6 * 1024)
-#endif // ndef WEB_SESSION_MIN_FREE_HEAP
+// The free heap the status page shows. ESP.getFreeHeap() on the ESP32 counts IRAM-only heap as well,
+// which neither malloc nor the network stack can use, so a board can read 95 KB free while the pool
+// the web server and WiFi buffers come from is at 1 KB. Report the byte-addressable internal heap there.
+static inline uint32_t UsableFreeHeap ()
+{
+#ifdef ARDUINO_ARCH_ESP32
+    uint32_t Response = heap_caps_get_free_size (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#else
+    uint32_t Response = ESP.getFreeHeap ();
+#endif // def ARDUINO_ARCH_ESP32
+    return Response;
+} // UsableFreeHeap
+
+//-----------------------------------------------------------------------------
+// Refuse a request while less than this much heap is free: serving it costs the response and its
+// buffers, and a failed allocation there is fatal on the ESP8266. The library measures the heap the
+// buffers come from. On the ESP32 that is the byte-addressable internal pool, and the floors stay off
+// there for now: a browser's six parallel connections take that pool to a few KB on every page load,
+// a floor refuses the page's own status poll before it helps, and a refused request costs a retry.
+#ifndef WEB_REQUEST_MIN_FREE_HEAP
+#   ifdef ARDUINO_ARCH_ESP32
+#       define WEB_REQUEST_MIN_FREE_HEAP 0
+#   else
+#       define WEB_REQUEST_MIN_FREE_HEAP (6 * 1024)
+#   endif // def ARDUINO_ARCH_ESP32
+#endif // ndef WEB_REQUEST_MIN_FREE_HEAP
 // Pace the transfers of responses that are already under way by the free heap, and pause them below this
 // much. A request admitted above the floor still allocates its response chunks, and the TCP library copies
 // them, so two transfers in flight can take the heap to the bottom, where the WiFi SDK fails (#20).
 #ifndef WEB_TRANSFER_MIN_FREE_HEAP
-#   define WEB_TRANSFER_MIN_FREE_HEAP (4 * 1024)
+#   ifdef ARDUINO_ARCH_ESP32
+#       define WEB_TRANSFER_MIN_FREE_HEAP 0
+#   else
+#       define WEB_TRANSFER_MIN_FREE_HEAP (4 * 1024)
+#   endif // def ARDUINO_ARCH_ESP32
 #endif // ndef WEB_TRANSFER_MIN_FREE_HEAP
+#ifdef ARDUINO_ARCH_ESP8266
+// Refuse a new connection while less than this much heap is free: accepting one costs the client and the
+// request objects. The accept-time floor lives in the ESP8266 TCP library; AsyncTCP on the ESP32 has none.
+#ifndef WEB_SESSION_MIN_FREE_HEAP
+#   define WEB_SESSION_MIN_FREE_HEAP WEB_REQUEST_MIN_FREE_HEAP
+#endif // ndef WEB_SESSION_MIN_FREE_HEAP
 #endif // def ARDUINO_ARCH_ESP8266
 
 //-----------------------------------------------------------------------------
@@ -159,12 +188,12 @@ void c_WebMgr::init ()
             async->SetMaxNumOpenTcpSessions(2);
             async->SetMinFreeHeapForNewSessions(WEB_SESSION_MIN_FREE_HEAP);
             delete async;
-            // the same floor for requests on connections that are already open (keep-alive)
-            AsyncWebServer::setMinFreeHeapForRequests(WEB_SESSION_MIN_FREE_HEAP);
-            // and pace the transfers themselves, so that they stop short of the bottom of the heap
-            AsyncWebServer::setMinFreeHeapForTransfers(WEB_TRANSFER_MIN_FREE_HEAP);
         }
         #endif // def ARDUINO_ARCH_ESP8266
+        // the same floor for requests on connections that are already open (keep-alive)
+        AsyncWebServer::setMinFreeHeapForRequests(WEB_REQUEST_MIN_FREE_HEAP);
+        // and pace the transfers themselves, so that they stop short of the bottom of the heap
+        AsyncWebServer::setMinFreeHeapForTransfers(WEB_TRANSFER_MIN_FREE_HEAP);
         // DEBUG_START;
         // Add header for SVG plot support?
     	DefaultHeaders::Instance ().addHeader (F ("Access-Control-Allow-Origin"),  "*");
@@ -792,7 +821,7 @@ void c_WebMgr::ProcessXJRequest (AsyncWebServerRequest* client)
     JsonObject status = WebJsonDoc[(char*)CN_status].to<JsonObject> ();
     JsonObject system = status[(char*)CN_system].to<JsonObject> ();
 
-    JsonWrite(system, F ("freeheap"), ESP.getFreeHeap ());
+    JsonWrite(system, F ("freeheap"), UsableFreeHeap ());
     JsonWrite(system, F ("uptime"), millis ());
     JsonWrite(system, F ("currenttime"), now ());
     JsonWrite(system, F ("SDinstalled"), FileMgr.SdCardIsInstalled ());
@@ -888,7 +917,7 @@ void c_WebMgr::ProcessHeapRequest (AsyncWebServerRequest* client)
     JsonObject status = WebJsonDoc[(char*)CN_Heap_colon].to<JsonObject> ();
     // DEBUG_V();
 
-    JsonWrite(status, F ("freeheap"), ESP.getFreeHeap ());
+    JsonWrite(status, F ("freeheap"), UsableFreeHeap ());
     // DEBUG_V();
 #ifdef ARDUINO_ARCH_ESP32
     JsonWrite(status, F ("n804_Free_Max"),  heap_caps_get_largest_free_block(0x804));

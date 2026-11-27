@@ -195,8 +195,11 @@ Give to
 The input signal of the SDI pin must follow the following definitions:
 
 a. Valid input data must be Manchester coded, and the signal changes from high to low to indicate " 1", from low to high Jump representation "0"
-b. After the chip is powered on, a synchronization frame must be sent first so that the chip can detect the baud rate of the communication. Sync frame The format is: 15’b111111111111111+4’b0001+11’b00000000000, in the sending synchronization
-c. After the frame, you must delay for a period of time before sending the data frame. This is for each chip to accurately detect To the baud rate of the communication, the delay time (us) is greater than: the number of connected chips ÷ the communication wave rate (MHz) × 30 After sending several frames of data, resend the reset frame and wait After 1ms, send the same Step frame, so that the chip eliminates accumulated errors, the reset frame format is: 15’b111111111111111+4’b0100 
+b. After the chip is powered on, a synchronization frame must be sent first so that the chip can detect the baud rate of the communication. 
+       Sync frame The format is: 15’b111111111111111+4’b0001+11’b00000000000, in the sending synchronization
+c. After the frame, you must delay for a period of time before sending the data frame. This is for each chip to accurately detect To the baud rate of the communication, the delay time (us) is greater than: the number of connected chips ÷ the communication wave rate (MHz) × 30 After sending several frames of data, 
+       resend the reset frame and wait After 1ms, send the same Step frame, so that the chip eliminates accumulated errors, 
+       the reset frame format is: 15’b111111111111111+4’b0100 
 d. The data frame format is: 15’b111111111111111+4’b0010 (data header) + first chip 39bit data + second chip 39bit data + …… + the first n chips 39bit data
 e. The first chip is the chip that receives data first, and the data format of the chip is: 1’ b0 (identification bit) + 12’ bxxxxxxxxxxxx (output port 1 data) + 1’ b0 (identification bit) + 12’ bxxxxxxxxxxxx (input Out port 2 data)+ 1’ b0 (identification bit) + 12’ bxxxxxxxxxxxx (output port 3 data), x is 1 or 0  
 f. Data is sent first MSB (most significant bit)

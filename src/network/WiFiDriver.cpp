@@ -377,7 +377,8 @@ void c_WiFiDriver::ProcessApScanResults ()
                 continue;
             }
 
-            Line  = F ("Found AP ");
+            bool IsCurrentAp = ((nullptr != CurrentBssid) && (0 == memcmp (CurrentBssid, WiFi.BSSID (index), sizeof (BestBssid))));
+            Line  = (IsCurrentAp) ? F ("Current AP ") : F ("Found AP ");
             Line += WiFi.BSSIDstr (index);
             Line += F (" on channel ");
             Line += WiFi.channel (index);
@@ -385,7 +386,7 @@ void c_WiFiDriver::ProcessApScanResults ()
             Line += WiFi.RSSI (index);
             logcon (Line);
 
-            if ((nullptr != CurrentBssid) && (0 == memcmp (CurrentBssid, WiFi.BSSID (index), sizeof (BestBssid))))
+            if (IsCurrentAp)
             {
                 // compare the candidates against the scan reading of the current AP
                 CurrentRssi = WiFi.RSSI (index);
@@ -406,7 +407,13 @@ void c_WiFiDriver::ProcessApScanResults ()
 
         if (IsRoamCheck)
         {
-            if (FoundAp && (BestRssi >= (CurrentRssi + WIFI_ROAM_MIN_IMPROVEMENT)))
+            if (!RoamingEnabled)
+            {
+                // roaming was turned off while the scan ran
+                break;
+            }
+
+            if (FoundAp && (BestRssi >= (CurrentRssi + RoamMinImprovement)))
             {
                 Line  = F ("Moving to AP ");
                 Line += BestBssidStr;
@@ -422,16 +429,22 @@ void c_WiFiDriver::ProcessApScanResults ()
                 RoamTargetChannel = BestChannel;
                 fsm_WiFi_state_Roaming_imp.Init ();
             }
-            else if ((0 == OtherApCount) && (NumNetworksFound >= 0))
+            else if ((0 == OtherApCount) && (NumNetworksFound >= 0) && (++NoOtherApScans >= WIFI_ROAM_GIVE_UP_SCANS))
             {
-                // Nothing to move to. The set of APs does not change while we stay connected.
+                // Several scans in a row saw no other AP: a single AP install. The set of APs does
+                // not change while we stay connected, so stop checking until the next connection.
                 logcon (F ("No other AP advertises the SSID. Roam checks stop until the next connection"));
                 RoamChecksAllowed = false;
             }
             else
             {
-                // Check again later, waiting longer each time the result is the same
-                logcon (F ("No stronger AP found. Staying on the current AP"));
+                // Check again later, waiting longer each time the result is the same. A single scan
+                // can miss an AP, so one empty result is treated like "nothing better".
+                if (0 != OtherApCount)
+                {
+                    NoOtherApScans = 0;
+                }
+                logcon ((0 == OtherApCount) ? F ("No other AP seen this time. Checking again later") : F ("No stronger AP found. Staying on the current AP"));
                 RoamCheckTimer.StartTimer (RoamCheckWaitMs, false);
                 RoamCheckWaitMs = RoamCheckWaitMs * 2;
                 if (RoamCheckWaitMs > WIFI_ROAM_MAX_RETRY_TIME_MS)
@@ -443,6 +456,9 @@ void c_WiFiDriver::ProcessApScanResults ()
         }
 
         // Initial connection. The ESP32 SDK picks the AP itself, so only the ESP8266 gets here.
+        // The station timeout starts now: the scan took its own time (up to WIFI_AP_SCAN_TIMEOUT_MS)
+        // and the AP has not been asked for anything yet.
+        FsmTimer.StartTimer (MilliSecondsInASecond * sta_timeout, false);
         if (FoundAp)
         {
             logcon (String (F ("Connecting to AP ")) + BestBssidStr);
@@ -460,27 +476,35 @@ void c_WiFiDriver::ProcessApScanResults ()
 } // ProcessApScanResults
 
 //-----------------------------------------------------------------------------
-// Called once a second while connected. After the signal has been weak for a
-// while, scan for a stronger AP that advertises the same SSID.
+// Called once a second while connected. If roaming is turned on and the signal
+// has been weak for a while, scan for a stronger AP that advertises the same SSID.
 void c_WiFiDriver::CheckSignalStrength ()
 {
     /// DEBUG_START;
 
     do // once
     {
-        if (!RoamChecksAllowed || ApScanInProgress || !RoamCheckTimer.IsExpired ())
+        if (!RoamingEnabled || !RoamChecksAllowed || ApScanInProgress || !RoamCheckTimer.IsExpired ())
         {
             break;
         }
 
+        if (PrimaryInputIsActive)
+        {
+            // Show data is arriving. A scan would interrupt it, so the weak signal
+            // clock only runs while the primary input is idle.
+            WeakSignalCount = 0;
+            break;
+        }
+
         int32_t CurrentRssi = WiFi.RSSI ();
-        if (CurrentRssi >= WIFI_ROAM_RSSI_THRESHOLD)
+        if (CurrentRssi >= RoamRssiThreshold)
         {
             WeakSignalCount = 0;
             break;
         }
 
-        if (++WeakSignalCount < WIFI_ROAM_WEAK_POLLS)
+        if (++WeakSignalCount < RoamWeakTime)
         {
             break;
         }
@@ -598,6 +622,10 @@ void c_WiFiDriver::GetConfig (JsonObject& json)
     JsonWrite(json, CN_ap_fallback,  ap_fallbackIsEnabled);
     JsonWrite(json, CN_ap_timeout,   ap_timeout);
     JsonWrite(json, CN_ap_reboot,    RebootOnWiFiFailureToConnect);
+    JsonWrite(json, CN_roam,         RoamingEnabled);
+    JsonWrite(json, CN_roam_rssi,    int (RoamRssiThreshold));
+    JsonWrite(json, CN_roam_time,    RoamWeakTime);
+    JsonWrite(json, CN_roam_delta,   RoamMinImprovement);
 
     // PrettyPrint(json, "WiFi Config");
 
@@ -770,6 +798,37 @@ bool c_WiFiDriver::SetConfig (JsonObject & json)
     ConfigChanged |= setFromJSON (RebootOnWiFiFailureToConnect, json, CN_ap_reboot);
     ConfigChanged |= setFromJSON (StayInApMode, json, CN_StayInApMode);
 
+    // The roaming settings take effect without touching the connection. The threshold
+    // goes through an int so that no setFromJSON instantiation for int8_t is needed.
+    int  RoamRssi = RoamRssiThreshold;
+    bool RoamConfigChanged = false;
+    RoamConfigChanged |= setFromJSON (RoamingEnabled,     json, CN_roam);
+    RoamConfigChanged |= setFromJSON (RoamRssi,           json, CN_roam_rssi);
+    RoamConfigChanged |= setFromJSON (RoamWeakTime,       json, CN_roam_time);
+    RoamConfigChanged |= setFromJSON (RoamMinImprovement, json, CN_roam_delta);
+    if (RoamConfigChanged)
+    {
+        // values outside their range fall back to the build defaults
+        if ((RoamRssi > -30) || (RoamRssi < -100))
+        {
+            RoamRssi = WIFI_ROAM_RSSI_THRESHOLD;
+        }
+        if ((RoamWeakTime < 1) || (RoamWeakTime > 3600))
+        {
+            RoamWeakTime = WIFI_ROAM_WEAK_POLLS;
+        }
+        if ((RoamMinImprovement < 1) || (RoamMinImprovement > 60))
+        {
+            RoamMinImprovement = WIFI_ROAM_MIN_IMPROVEMENT;
+        }
+        RoamRssiThreshold = int8_t (RoamRssi);
+
+        // start the weak signal clock over with the new thresholds
+        WeakSignalCount   = 0;
+        RoamChecksAllowed = true;
+        RoamCheckWaitMs   = WIFI_ROAM_RETRY_TIME_MS;
+    }
+
     // DEBUG_V ("                     ip: " + ip);
     // DEBUG_V (                "gateway: " + gateway);
     // DEBUG_V (                "netmask: " + netmask);
@@ -806,7 +865,7 @@ bool c_WiFiDriver::SetConfig (JsonObject & json)
 
     // DEBUG_V (String("ConfigChanged: ") + String(ConfigChanged));
     // DEBUG_END;
-    return ConfigChanged;
+    return ConfigChanged || RoamConfigChanged;
 
 } // SetConfig
 
@@ -1216,6 +1275,7 @@ void fsm_WiFi_state_ConnectedToAP::Init ()
 
     // give the link time to settle before looking for a stronger AP
     pWiFiDriver->WeakSignalCount   = 0;
+    pWiFiDriver->NoOtherApScans    = 0;
     pWiFiDriver->RoamChecksAllowed = true;
     pWiFiDriver->RoamCheckWaitMs   = WIFI_ROAM_RETRY_TIME_MS;
     pWiFiDriver->RoamCheckTimer.StartTimer (WIFI_ROAM_SETTLE_TIME_MS, false);

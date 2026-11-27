@@ -48,13 +48,13 @@ protected:
 #define UCS1903_PIXEL_DATA_RATE              800000.0
 #define UCS1903_PIXEL_NS_BIT_TOTAL           ( (1.0 / UCS1903_PIXEL_DATA_RATE) * NanoSecondsInASecond)
 
-#define UCS1903_PIXEL_NS_BIT_0_HIGH          250.0 // 250ns +/- 150ns per datasheet
+#define UCS1903_PIXEL_NS_BIT_0_HIGH          500.0 // 500ns +/- 150ns per datasheet
 #define UCS1903_PIXEL_NS_BIT_0_LOW           (UCS1903_PIXEL_NS_BIT_TOTAL - UCS1903_PIXEL_NS_BIT_0_HIGH)
 
-#define UCS1903_PIXEL_NS_BIT_1_HIGH          1000.0 // 1000ns +/- 150ns per datasheet
+#define UCS1903_PIXEL_NS_BIT_1_HIGH          2000.0 // 2000ns +/- 150ns per datasheet
 #define UCS1903_PIXEL_NS_BIT_1_LOW           (UCS1903_PIXEL_NS_BIT_TOTAL - UCS1903_PIXEL_NS_BIT_1_HIGH)
 
-#define UCS1903_PIXEL_IDLE_TIME_NS           25000.0 // 24us per datasheet
+#define UCS1903_PIXEL_IDLE_TIME_NS           24000.0 // 24us per datasheet
 #define UCS1903_PIXEL_IDLE_TIME_US           (UCS1903_PIXEL_IDLE_TIME_NS / float(NanoSecondsInAMicroSecond))
 
 #define UCS1903_PIXEL_BITS_PER_INTENSITY     8

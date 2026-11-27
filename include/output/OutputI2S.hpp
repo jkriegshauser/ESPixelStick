@@ -39,10 +39,12 @@ public:
         uint32_t    I2SChannelId;
         gpio_num_t  DataPin;
         void        *arg;
-        bool        (*GetNextIntensityBitSlices) (void*arg, I2S_Item_t * data, uint32_t numSlices, I2S_Item_t DefaultIntensitySliceData) = nullptr;
+        bool        (*GetNextIntensityBitSlices) (void * arg, I2S_Item_t * data, uint32_t & numSlices, I2S_Item_t DefaultIntensitySliceData) = nullptr;
         void        (*StartNewFrame) (void*arg) = nullptr;
-        bool        IsActive;
+        void        (*SetDefaultDataValue) (void*arg, I2S_Item_t DefaultIntensitySliceData) = nullptr;
+        volatile bool IsEnabled;
         bool        IdleLevelIsHigh;
+        volatile bool IsRunning; // set true when processing data in the ISR
     };
 
     // must be a multiple of 32 bits (aka 4 bytes)
@@ -56,6 +58,18 @@ public:
         alignas (4) uint32_t   UsageCounter;
         #endif // def USE_I2S_DEBUG_COUNTERS
         alignas (4) I2S_Item_t data[I2S_NumSendBufferItems];
+    };
+
+    union I2SDataAsUint_t
+    {
+        c_OutputI2S::I2S_Item_t DataAsBytes[4];
+        uint32_t AsUint;
+    };
+
+    union I2SDataAsUint64_t
+    {
+        c_OutputI2S::I2S_Item_t DataAsBytes[8];
+        uint64_t AsUint;
     };
 
 private:
@@ -77,7 +91,7 @@ public:
     virtual ~c_OutputI2S ();
 
     void        Begin               ();
-    void        RegisterSlotDevice  (OutputI2SChannelConfig_t config, uint32_t * DataBit, uint32_t * DataBitMask);
+    void        RegisterSlotDevice  (OutputI2SChannelConfig_t config, I2S_Item_t & DataBit, I2S_Item_t & DataBitMask);
     void        RemoveSlotDevice    (uint32_t I2SChannelId);
     void        GetStatus           (ArduinoJson::JsonObject& jsonStatus);
     void        GetDriverName       (String &value)  { value = F("I2S"); }

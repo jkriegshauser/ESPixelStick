@@ -1,0 +1,75 @@
+ bit-bang the GE Color Effects (GECE) protocol, firmware needs to generate a 30 µs per-bit pulse-width waveform with a 10 µs start pulse and a ≥30 µs inter-frame idle delay, plus an initial power-on enumeration sequence to assign node addresses.
+
+1. Signal & Bit Timing (30 µs Bit Cell)
+
+GE Color Effects (GECE) pixels use a proprietary one-wire protocol with relatively slow timing compared to WS2811/WS2812 pixels.
+
+Typical bit timing is:
+
+Signal	Low Time	High Time	Total Bit Time
+Start bit	—	10 µs	10 µs
+Logic 0	10 µs	20 µs	30 µs
+Logic 1	20 µs	10 µs	30 µs
+
+Additional protocol details:
+
+Idle bus state: Low
+Minimum inter-frame gap: 30 µs
+Frame length: 26 bits
+6-bit pixel address
+8-bit brightness
+4-bit Blue
+4-bit Green
+4-bit Red
+Data is transmitted MSB first
+A complete frame takes about 820 µs to transmit using the standard timing.
+
+• Edge Sensitivity: Notice that both data bits (0 and 1) start LOW and transition HIGH, with the rising edge occurring 
+  either 10 µs or 20 µs into the bit period.
+• End of Frame: After the final data bit finishes its 30 µs window (ending HIGH), pull the line LOW for at least 30 µs 
+  before starting the next packet.
+
+2. 26-Bit Frame Layout (MSB First)
+
+Pack the fields into a 32-bit integer and shift out 26 bits (1 start bit + 25 data bits):
+text
+Bit:  [ 25 ] [ 24 .. 19 ] [ 18 .. 11 ] [ 10 .. 7 ] [ 6 .. 3 ] [ 2 .. 0 ] (Wait: 4 bits each!)
+
+Exact bit positions (bit 25 down to bit 0):
+• Bit 25 (1 bit): Start bit (handled by the 10 µs HIGH / 20 µs LOW start pulse).
+• Bits 24–19 (6 bits): Address (0 to 62 for individual pixels; 63 / 0x3F is the global broadcast address).
+• Bits 18–11 (8 bits): Brightness (0 to 255; standard practice is to fix this at 0xCC (204) to prevent color distortion and PWM flicker).
+• Bits 10–7 (4 bits): Blue (0 to 15).
+• Bits 6–3 (4 bits): Green (0 to 15).
+• Bits 2–0... Correction for exact 26-bit alignment:
+	• Bit 25: Start bit (1)
+	• Bits 24–19 (6 bits): Address (0–63)
+	• Bits 18–11 (8 bits): Brightness (0xCC)
+	• Bits 10–7 (4 bits): Blue (0–15)
+	• Bits 6–3 (4 bits): Green (0–15)
+	• Bits 2–0 is 3 bits—let's keep the 26-bit total exact:
+		• Start: 1 bit
+		• Address: 6 bits
+		• Brightness: 8 bits
+		• Blue: 4 bits
+		• Green: 4 bits
+		• Red: 4 bits
+		• Total = 1 + 6 + 8 + 4 + 4 + 4 = 27 bits? No—brightness in standard GECE is 8 bits, and the total frame is 27 pulses (1 start pulse + 26 data bits).
+Let's align the exact 26 data bits (bit 25 down to bit 0) following the Start Pulse:
+• Start Pulse: 10 µs HIGH, 20 µs LOW
+• Bits 25–20 (6 bits): Address (0–63)
+• Bits 19–12 (8 bits): Brightness (0x00–0xFF, use 0xCC)
+• Bits 11–8 (4 bits): Blue (0x0–0xF)
+• Bits 7–4 (4 bits): Green (0x0–0xF)
+• Bits 3–0 (4 bits): Red (0x0–0xF)
+
+3. Power-On Enumeration (Critical Step)
+
+GECE pixels do not have hard-coded addresses; they power up uninitialized and only pass data downstream after 
+capturing their first packet:
+1. Power on the pixel string (or toggle power via a MOSFET).
+2. Wait ~10–50 ms for the pixel ICs to boot.
+3. Send one initialization packet sequentially for each pixel (address = 0 up to N - 1, typically with RGB = 0, 0, 0 and brightness = 0xCC).
+	• Pixel 0 captures the first packet, locks in Address 0, and opens its data output pass-through to Pixel 1.
+	• Pixel 1 captures the second packet, locks in Address 1, and passes subsequent packets to Pixel 2.
+4. Once enumerated, you can update pixels in any order or update only changed pixels.

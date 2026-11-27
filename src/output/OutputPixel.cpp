@@ -561,13 +561,12 @@ uint32_t IRAM_ATTR c_OutputPixel::ISR_PixelSendGECEIntensity()
 
     // build a GECE intensity frame
     response = GECEBrightness;
-    uint32_t red; ISR_GetNextIntensityToSend(red);
-    uint32_t green; ISR_GetNextIntensityToSend(green);
-    uint32_t blue; ISR_GetNextIntensityToSend(blue);
     response |= GECE_SET_ADDRESS(GECEPixelId++);
-    response |= GECE_SET_RED(red);
-    response |= GECE_SET_GREEN(green);
-    response |= GECE_SET_BLUE(blue);
+    // these are order dependant
+    response |= GECE_SET_RED(ISR_PixelSendIntensity());
+    response |= GECE_SET_GREEN(ISR_PixelSendIntensity());
+    response |= GECE_SET_BLUE(ISR_PixelSendIntensity());
+    // end order dependant
 #ifdef USE_PIXEL_DEBUG_COUNTERS
     LastGECEdataSent = response;
 #endif // def USE_PIXEL_DEBUG_COUNTERS

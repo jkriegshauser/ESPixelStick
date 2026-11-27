@@ -58,7 +58,7 @@ protected:
 #define UCS8903_PIXEL_NS_BIT_1_HIGH          800.0 // 800ns +/- 150ns per datasheet
 #define UCS8903_PIXEL_NS_BIT_1_LOW           400.0 // 400ns -0 per data sheet
 
-#define UCS8903_PIXEL_IDLE_TIME_NS           30000.0 // >24us per datasheet
+#define UCS8903_PIXEL_IDLE_TIME_NS           1000000.0 // >1ms per datasheet
 #define UCS8903_PIXEL_IDLE_TIME_US           (UCS8903_PIXEL_IDLE_TIME_NS / float(NanoSecondsInAMicroSecond))
 #define UCS8903_INTENSITY_DATA_WIDTH         16
 

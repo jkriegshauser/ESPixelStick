@@ -31,16 +31,23 @@
 #define WIFI_AP_SCAN_TIMEOUT_MS   (10 * MilliSecondsInASecond)
 
 // Roaming: while connected, look for a stronger AP once the signal has stayed weak for a while.
-// Each value can be overridden with a -D build flag in platformio_user.ini. Setting the
-// threshold to -127 disables roaming.
+// Roaming and its thresholds are settings on the WiFi configuration page (Advanced Mode).
+// These are the defaults for a device that has not saved them; each can be changed with
+// a -D build flag in platformio_user.ini.
+#ifndef WIFI_ROAM_ENABLED
+#   define WIFI_ROAM_ENABLED           true   ///< Roaming is on unless it is turned off in the configuration
+#endif
 #ifndef WIFI_ROAM_RSSI_THRESHOLD
 #   define WIFI_ROAM_RSSI_THRESHOLD    (-75)  ///< dBm. Below this the link is considered weak
 #endif
 #ifndef WIFI_ROAM_WEAK_POLLS
-#   define WIFI_ROAM_WEAK_POLLS        15     ///< Consecutive one second polls below the threshold before scanning
+#   define WIFI_ROAM_WEAK_POLLS        15     ///< Seconds (one second polls) below the threshold before scanning
 #endif
 #ifndef WIFI_ROAM_MIN_IMPROVEMENT
 #   define WIFI_ROAM_MIN_IMPROVEMENT   10     ///< dB. A candidate AP must beat the current AP by at least this much
+#endif
+#ifndef WIFI_ROAM_GIVE_UP_SCANS
+#   define WIFI_ROAM_GIVE_UP_SCANS     3      ///< Consecutive scans that see no other AP before roam checks stop for this connection
 #endif
 #ifndef WIFI_ROAM_SETTLE_TIME_MS
 #   define WIFI_ROAM_SETTLE_TIME_MS    (30 * MilliSecondsInASecond)       ///< Wait after connecting before the first check
@@ -110,6 +117,7 @@ public:
     void      Disable ();
     void      Enable ();
     String    GetWiFiMacAddress() {return WiFi.macAddress ();}
+    void      SetPrimaryInputIsActive (bool value) { PrimaryInputIsActive = value; }
 
 private:
 #define DEFAULT_SSID_NOT_SET "DEFAULT_SSID_NOT_SET"
@@ -126,11 +134,16 @@ private:
     FastTimer   ApScanTimer;                    // Deadline for the running scan
     uint16_t    WeakSignalCount   = 0;          // Consecutive polls with the RSSI below the roaming threshold
     bool        RoamChecksAllowed = true;       // Cleared when a scan shows no other AP for the SSID
+    int8_t      RoamRssiThreshold = WIFI_ROAM_RSSI_THRESHOLD;   // dBm. Below this the link counts as weak
     uint32_t    RoamCheckWaitMs   = WIFI_ROAM_RETRY_TIME_MS; // Wait after a fruitless check, doubles each time
     FastTimer   RoamCheckTimer;                 // Minimum time between roam checks
     uint8_t     RoamTargetBssid[6];             // AP to move to when a roam check found a stronger AP
+    uint8_t     RoamMinImprovement = WIFI_ROAM_MIN_IMPROVEMENT; // dB. A candidate AP must beat the current one by this much
+    bool        RoamingEnabled    = WIFI_ROAM_ENABLED;          // Move to a stronger AP when the signal stays weak
     int32_t     RoamTargetChannel = 0;
     bool        ConnectionIsPinned = false;     // The current attempt targets a specific BSSID
+    bool        PrimaryInputIsActive = false;   // Show data is arriving on the primary input. No roam scan while it is
+    uint16_t    RoamWeakTime      = WIFI_ROAM_WEAK_POLLS;       // Seconds the signal must stay weak before a scan
     void        StartApScan (bool IsRoamCheck);
     void        ProcessApScanResults ();
     void        CheckSignalStrength ();
@@ -141,6 +154,7 @@ private:
     FastTimer   NextPoll;
     uint32_t    PollInterval = MilliSecondsInASecond;
     bool        ReportedIsWiFiConnected = false;
+    uint8_t     NoOtherApScans    = 0;          // Consecutive roam scans that saw no other AP for the SSID
 
     char        ap_ssid[65];
     char        ap_passphrase[65];

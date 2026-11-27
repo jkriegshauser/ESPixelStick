@@ -21,8 +21,6 @@
 
 #include "output/OutputI2S.hpp"
 #include "driver/gpio.h"
-#include "esp_rom_gpio.h"
-#include <numeric>
 #include "esp_attr.h"
 
 //----------------------------------------------------------------------------
@@ -56,12 +54,19 @@ void IRAM_ATTR c_OutputI2S::ISR_Handler (void * _TransmitDmaBuffer)
 
     // reset the buffer management fields
     TransmitDmaBuffer->header.length = TransmitDmaBuffer->header.size;
-    TransmitDmaBuffer->header.offset = 0; // Always start to the begining of the buffer
+    TransmitDmaBuffer->header.offset = 0; // Always start at the begining of the buffer
     
-    if (pCurrentPort->IsActive)
+    uint32_t numSlices = TransmitDmaBuffer->header.size;
+
+    if (pCurrentPort->IsEnabled)
     {
         // fill in the data
-        if (false == pCurrentPort->GetNextIntensityBitSlices (pCurrentPort->arg, (I2S_Item_t *) (TransmitDmaBuffer->header.buf), TransmitDmaBuffer->header.size, DefaultIntensitySliceData))
+        pCurrentPort->IsRunning = true;
+        bool MoreDataToSend = pCurrentPort->GetNextIntensityBitSlices (pCurrentPort->arg, (I2S_Item_t *) (TransmitDmaBuffer->header.buf), numSlices, DefaultIntensitySliceData);
+        pCurrentPort->IsRunning = false;
+
+        // do we have more data to send for this port?
+        if (false == MoreDataToSend)
         {
             // port does not have more intensity bit slices, move to the next port
             ISR_MoveToNextPort ();
@@ -71,6 +76,17 @@ void IRAM_ATTR c_OutputI2S::ISR_Handler (void * _TransmitDmaBuffer)
     {
         // current port is not active, move to the next port
         ISR_MoveToNextPort ();
+    }
+
+    // set the number of slices actually used
+    TransmitDmaBuffer->header.length = TransmitDmaBuffer->header.size - numSlices;
+
+    if(0 == TransmitDmaBuffer->header.length)
+    {
+        // hw may not handle an empty buffer very well
+        // fill the buffer with defaults
+        TransmitDmaBuffer->header.length = TransmitDmaBuffer->header.size;
+        memset(TransmitDmaBuffer->data, DefaultIntensitySliceData, sizeof(TransmitDmaBuffer->data));
     }
 
     // hand the buffer back to the dma engine
@@ -94,10 +110,12 @@ void IRAM_ATTR c_OutputI2S::ISR_MoveToNextPort ()
         }
 
         // did we find a port to output?
-        if (pCurrentPort->IsActive)
+        if (pCurrentPort->IsEnabled)
         {
             // output this port
+            pCurrentPort->IsRunning = true;
             pCurrentPort->StartNewFrame (pCurrentPort->arg);
+            pCurrentPort->IsRunning = false;
             break;
         }
         // try the next port
@@ -118,7 +136,8 @@ c_OutputI2S::c_OutputI2S ()
         CurrentChannel.GetNextIntensityBitSlices = nullptr;
         CurrentChannel.StartNewFrame = nullptr;
         CurrentChannel.IdleLevelIsHigh = false;
-        CurrentChannel.IsActive = false;
+        CurrentChannel.IsEnabled = false;
+        CurrentChannel.IsRunning = false;
     }
 
     uint BufferId = 0;
@@ -138,7 +157,7 @@ c_OutputI2S::c_OutputI2S ()
         CurrentDmaBuffer.header.owner = I2sParallelDmaBufferOwnerDMA;
 
         // clear the data space
-        memset (CurrentDmaBuffer.data, 0xff, CurrentDmaBuffer.header.size);
+        memset (CurrentDmaBuffer.data, 0x00, sizeof(CurrentDmaBuffer.data));
 
         // next buffer ID
         ++BufferId;
@@ -219,7 +238,7 @@ void c_OutputI2S::GetStatus (ArduinoJson::JsonObject& jsonStatus)
 } // GetStatus
 
 //----------------------------------------------------------------------------
-void c_OutputI2S::RegisterSlotDevice (OutputI2SChannelConfig_t config, uint32_t * DataBit, uint32_t * DataBitMask)
+void c_OutputI2S::RegisterSlotDevice (OutputI2SChannelConfig_t config, I2S_Item_t & DataBit, I2S_Item_t & DataBitMask)
 {
     // DEBUG_START;
 
@@ -243,26 +262,41 @@ void c_OutputI2S::RegisterSlotDevice (OutputI2SChannelConfig_t config, uint32_t 
             break;
         }
 
+        if (nullptr == config.SetDefaultDataValue)
+        {
+            logcon (F ("Invalid SetDefaultDataValue function pointer"));
+            break;
+        }
+
         auto & currentConfig = OutputI2SSlotConfigs[config.I2SChannelId];
         currentConfig.arg = config.arg;
         currentConfig.GetNextIntensityBitSlices = config.GetNextIntensityBitSlices;
         currentConfig.StartNewFrame = config.StartNewFrame;
+        currentConfig.SetDefaultDataValue = config.SetDefaultDataValue;
         currentConfig.IdleLevelIsHigh = config.IdleLevelIsHigh;
 
-        *DataBit = 1 << config.I2SChannelId;
-        *DataBitMask = ~ (1 << config.I2SChannelId);
+        DataBit = 1 << config.I2SChannelId;
+        DataBitMask = ~ (1 << config.I2SChannelId);
         // DEBUG_V (String ("DataBit: 0x") + String (*DataBit, HEX));
         SetGpio (config.I2SChannelId, config.DataPin);
 
         if (config.IdleLevelIsHigh)
         {
-            DefaultIntensitySliceData |= *DataBit;
+            DefaultIntensitySliceData |= DataBit;
         }
         else
         {
-            DefaultIntensitySliceData &= *DataBitMask;
+            DefaultIntensitySliceData &= DataBitMask;
         }
     
+        // DEBUG_V ("notify the active channels that there is a new default output value");
+        for (auto currentPort : OutputI2SSlotConfigs)
+        {
+            if (nullptr != currentPort.SetDefaultDataValue)
+            {
+                currentPort.SetDefaultDataValue (currentPort.arg, DefaultIntensitySliceData);
+            }
+        }
     } while (false);
 
     // DEBUG_END;
@@ -286,10 +320,19 @@ void c_OutputI2S::RemoveSlotDevice (uint32_t I2SChannelId)
         auto & currentConfig = OutputI2SSlotConfigs[I2SChannelId];
 
         // must be first
-        currentConfig.IsActive = false;
+        currentConfig.IsEnabled = false;
+
+        // delay 1 buffer time to give the current ISR time to swap channels
+        delayMicroseconds(390);
+
+        // wait for any current operation to complete. 
+        // There is no other exit since a stuck ISR / this loop, MUST cause a WDT expiration.
+        while(true == currentConfig.IsRunning) {delayMicroseconds(100);}
+
         currentConfig.arg = nullptr;
         currentConfig.GetNextIntensityBitSlices = nullptr;
         currentConfig.StartNewFrame = nullptr;
+        currentConfig.SetDefaultDataValue = nullptr;
 
         SetGpio (I2SChannelId, gpio_num_t (I2S_PIN_NO_CHANGE));
 
@@ -343,7 +386,7 @@ void c_OutputI2S::SetOutputState (uint32_t I2SChannelId, bool NewState)
 
     // DEBUG_V (String ("I2SChannelId: ") + String (I2SChannelId));
     // DEBUG_V (String ("    NewState: ") + String (NewState));
-    OutputI2SSlotConfigs[I2SChannelId].IsActive = NewState;
+    OutputI2SSlotConfigs[I2SChannelId].IsEnabled = NewState;
 
     // DEBUG_END;
 } // SetOutputState
@@ -356,8 +399,12 @@ uint32_t c_OutputI2S::GetNumTimeSlicesForTargetTimeNS (uint32_t TargetTimeInNano
     uint32_t Result = 0;
     uint32_t I2S_TickTimeInNS = (uint32_t) (i2sParallel.get_clockNS ());
 
-    // round up
-    Result = (TargetTimeInNanoSec + I2S_TickTimeInNS - 1) / I2S_TickTimeInNS;
+    if( 0 != I2S_TickTimeInNS)
+    {
+        // round up
+        Result = (TargetTimeInNanoSec + I2S_TickTimeInNS - 1) / I2S_TickTimeInNS;
+    }
+
     if (0 == Result) Result = 1;
 
     // DEBUG_V (String ("TargetTimeInNanoSec: ") + String (TargetTimeInNanoSec));
